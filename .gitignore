@@ -1,0 +1,51 @@
+.DS_Store
+.build/
+.swiftpm/
+*.app/
+*.dSYM/
+*.xcuserstate
+xcuserdata/
+
+# Local accounts, access tokens and signing identities.
+.env
+.env.*
+credentials.json
+connection.json
+request.json
+inspection.json
+*.keystore
+*.keychain
+*.keychain-db
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.mobileprovision
+*.provisionprofile
+
+# Private local notes and generated capture files.
+/README.txt
+/STATUS.txt
+*.log
+*_screen_*.png
+*_marked_*.png
+*.mp4
+*.mov
+*.mkv
+.recording-*
+
+# Generated Android and icon build products.
+/AndroidAutomation/classes/
+/AndroidAutomation/dex/
+/AndroidAutomation/.source-sha256
+*.apk
+*.idsig
+/Assets/AppIcon.iconset/
+/Assets/AppIcon.icns
+
+# The app only bundles the open-source scrcpy server and its license.
+/tools/scrcpy/*
+!/tools/scrcpy/scrcpy-server
+!/tools/scrcpy/LICENSE
