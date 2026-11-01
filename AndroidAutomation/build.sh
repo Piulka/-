@@ -13,7 +13,7 @@ sdk="$HOME/Library/Android/sdk"
 jdk='/Applications/Android Studio.app/Contents/jbr/Contents/Home'
 export JAVA_HOME="$jdk"
 mkdir -p classes dex
-"$jdk/bin/javac" -Xlint:-options --release 8 -classpath "$sdk/platforms/android-37.0/android.jar" -d classes src/local/drivee/qahelper/FlowInstrumentation.java
+"$jdk/bin/javac" -Xlint:-options --release 8 -classpath "$sdk/platforms/android-37.0/android.jar" -d classes src/local/drivee/qahelper/*.java
 "$sdk/build-tools/36.0.0/d8" --lib "$sdk/platforms/android-37.0/android.jar" --min-api 26 --output dex classes/local/drivee/qahelper/*.class
 "$sdk/build-tools/36.0.0/aapt2" link -I "$sdk/platforms/android-37.0/android.jar" --manifest AndroidManifest.xml -o unsigned.apk
 /usr/bin/python3 - <<'PY'
