@@ -50,3 +50,18 @@ enum AndroidWire {
         return CGRect(x:bounds.midX-s.width/2,y:bounds.midY-s.height/2,width:s.width,height:s.height)
     }
 }
+
+enum AndroidForeground {
+    static func package(in dump:String)->String? {
+        let lines=dump.split(separator:"\n").map(String.init)
+        let candidates=lines.filter{$0.contains("topResumedActivity=")}+lines.filter{$0.contains("mResumedActivity:") || $0.contains("mResumedActivity=")}
+        let component=try! NSRegularExpression(pattern:#"(?:^|\s)([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)/[A-Za-z0-9_.$]+"#)
+        for line in candidates {
+            if let match=component.firstMatch(in:line,range:NSRange(line.startIndex...,in:line)),let range=Range(match.range(at:1),in:line){return String(line[range])}
+        }
+        return nil
+    }
+    static func isProtected(_ package:String,home:String?)->Bool {
+        package==home || ["android","com.android.systemui","com.android.permissioncontroller","com.google.android.permissioncontroller","com.huawei.android.launcher","com.mi.android.globallauncher","com.miui.home"].contains(package)
+    }
+}

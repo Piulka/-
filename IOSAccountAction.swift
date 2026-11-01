@@ -86,7 +86,7 @@ private final class MirrorFrames:NSObject,SCStreamOutput,SCStreamDelegate,@unche
             }
             do {
                 try AccountVault.validate(phone:phone,otp:otp)
-                guard ["08","09"].contains(stand) else{throw AuthFailure("Неизвестный стенд")}
+                guard QAEnvironment.valid(stand) else{throw AuthFailure("Неизвестный стенд")}
                 guard let app=NSRunningApplication.runningApplications(withBundleIdentifier:"com.apple.ScreenContinuity").first else{throw AuthFailure("Откройте видеоповтор iPhone и подключитесь")}
                 mirror=app
                 try await activateMirror(app)
@@ -239,6 +239,13 @@ private final class MirrorFrames:NSObject,SCStreamOutput,SCStreamDelegate,@unche
         repeat{let s=try await screen();if predicate(s){try await pause(0.25);let settled=try await screen();if predicate(settled){return settled}};try await pause(0.15)}while Date()<until
         throw AuthFailure("Неожиданный экран iPhone. Проверьте видеоповтор")
     }
+    private func scrollServers(in screen:PhoneRead,up:Bool)async throws {
+        guard screen.find("Module primary") != nil,let app=mirror,NSWorkspace.shared.frontmostApplication?.processIdentifier==app.processIdentifier else{throw AuthFailure("Не найден список стендов iPhone")}
+        guard let list=CGWindowListCopyWindowInfo(.optionIncludingWindow,screen.window.windowID) as? [[String:Any]],let b=list.first?[kCGWindowBounds as String] as? [String:Any],let rect=CGRect(dictionaryRepresentation:b as CFDictionary),abs(rect.minX-screen.window.frame.minX)<2,abs(rect.minY-screen.window.frame.minY)<2,abs(rect.width-screen.window.frame.width)<2 else{throw AuthFailure("Окно переместилось. Запустите вход ещё раз")}
+        let event=CGEvent(scrollWheelEvent2Source:nil,units:.pixel,wheelCount:1,wheel1:up ? 450 : -450,wheel2:0,wheel3:0)
+        event?.location=CGPoint(x:rect.minX+rect.width*0.7,y:rect.minY+rect.height*0.6)
+        event?.post(tap:.cghidEventTap);try await pause(0.3)
+    }
     private func authenticate(phone:String,otp:String,stand:String)async throws {
         var s=try await screen()
         if s.find("Module primary") != nil,let close=s.find("Закрыть"){try await tap(close,in:s);s=try await wait{$0.find("Укажите телефон") != nil || $0.find("Выход из аккаунта") != nil}}
@@ -257,17 +264,24 @@ private final class MirrorFrames:NSObject,SCStreamOutput,SCStreamDelegate,@unche
             try await tap(logout,in:s);s=try await wait{$0.find("Укажите телефон") != nil}
         }
         message="Проверяю стенд…"
-        if !s.lines.contains(where:{$0.text.contains("test"+stand+"-")}) {
+        if !s.lines.contains(where:{QAEnvironment.matches($0.text,stand:stand)}) {
             guard let label=s.find("Current Host") else{throw AuthFailure("Не найден выбор стенда")}
-            if let host=s.lines.first(where:{$0.text.lowercased().contains("test") && $0.box.midY>label.box.midY && $0.box.midY<label.box.midY+0.08}){try await tap(host,in:s)}
+            if let host=s.lines.first(where:{$0.text.lowercased().contains("fridi") && $0.box.midY>label.box.midY && $0.box.midY<label.box.midY+0.08}){try await tap(host,in:s)}
             else{try await click(CGPoint(x:label.box.midX,y:label.box.midY+0.024),in:s)}
             s=try await wait{$0.find("Module primary") != nil}
             if let primary=s.find("Module primary"){try await tap(primary,in:s)}
-            s=try await wait{$0.lines.contains(where:{$0.text.contains("test"+stand+"-")})}
-            guard let target=s.lines.first(where:{$0.text.contains("test"+stand+"-")}) else{throw AuthFailure("Стенд не найден")};try await tap(target,in:s)
+            s=try await screen()
+            for direction in [false,true] {
+                for _ in 0..<7 {
+                    if s.lines.contains(where:{QAEnvironment.matches($0.text,stand:stand)}){break}
+                    try await scrollServers(in:s,up:direction);s=try await screen()
+                }
+                if s.lines.contains(where:{QAEnvironment.matches($0.text,stand:stand)}){break}
+            }
+            guard let target=s.lines.first(where:{QAEnvironment.matches($0.text,stand:stand)}) else{throw AuthFailure("Стенд не найден в сборке")};try await tap(target,in:s)
             s=try await screen();guard let close=s.find("Закрыть") else{throw AuthFailure("Не найдена кнопка закрытия стендов")};try await tap(close,in:s)
             s=try await wait{$0.find("Укажите телефон") != nil}
-            guard s.lines.contains(where:{$0.text.contains("test"+stand+"-")}) else{throw AuthFailure("Стенд не переключился")}
+            guard s.lines.contains(where:{QAEnvironment.matches($0.text,stand:stand)}) else{throw AuthFailure("Стенд не переключился")}
         }
         guard var next=s.find("Далее") else{throw AuthFailure("Кнопка Далее не найдена")}
         if !s.lines.contains(where:{$0.text.contains("+258")}) {

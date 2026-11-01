@@ -41,6 +41,7 @@ inspection.json
 /AndroidAutomation/dex/
 /AndroidAutomation/.source-sha256
 *.apk
+*.ipa
 *.idsig
 /Assets/AppIcon.iconset/
 /Assets/AppIcon.icns
@@ -49,3 +50,6 @@ inspection.json
 /tools/scrcpy/*
 !/tools/scrcpy/scrcpy-server
 !/tools/scrcpy/LICENSE
+
+# Python metadata inspector caches.
+__pycache__/

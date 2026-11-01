@@ -2,12 +2,6 @@ import Foundation
 import Darwin
 import CryptoKit
 
-struct TestAccount: Identifiable, Codable, Hashable {
-    var id:String
-    var name:String
-    var role:String
-    var label:String { role.isEmpty ? name : "\(name) · \(role)" }
-}
 enum AccountVault {
     private static var directory:URL {FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("Drivee QA Desk/Accounts",isDirectory:true)}
     private static func access<T>(write:Bool,_ operation:(inout [String:String])throws->T)throws->T {
@@ -44,7 +38,9 @@ enum AccountVault {
         guard phone.range(of:"^258[0-9]{8}$",options:.regularExpression) != nil else{throw AuthFailure("invalid_seed")}
         if let otp=job["otp"]{try validate(phone:phone,otp:otp)}
         var all=accounts();let id=job["id"] ?? UUID().uuidString
-        let entry=TestAccount(id:id,name:name,role:job["role"] ?? "")
+        let stand=job["stand"] ?? "08"
+        guard QAEnvironment.valid(stand) else{throw AuthFailure("invalid_seed")}
+        let entry=TestAccount(id:id,name:name,role:job["role"] ?? "",stand:stand)
         if let index=all.firstIndex(where:{$0.id==id}){all[index]=entry}else{all.append(entry)}
         try save(phone,key:id)
         if let otp=job["otp"]{try save(otp,key:"otp")}

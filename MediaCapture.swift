@@ -265,6 +265,14 @@ private final class MovieEncoder:@unchecked Sendable {
         var labels=choice.slots.map{slot in model.devices.first(where:{$0.id==model.selection[slot]})?.name ?? "Android \(slot+1)"}
         if choice.includesIPhone{labels.append("iPhone")};return labels.map{$0.components(separatedBy:" · ")[0]}.joined(separator:" + ")
     }
+    func shortTitle(_ choice:CaptureChoice)->String {
+        if choice == .iphone{return "iPhone"}
+        let names=choice.slots.map{slot in model?.devices.first(where:{$0.id==model?.selection[slot]})?.name.components(separatedBy:" · ").first ?? "A\(slot+1)"}
+        if names.count==1 && !choice.includesIPhone{return names[0]}
+        var labels=names.map{String($0.prefix(1))}
+        if labels.count==2 && labels[0]==labels[1]{labels=["1","2"]}
+        if choice.includesIPhone{labels.append("iP")};return labels.joined(separator:"+")
+    }
     func chooseFolder(){
         if let folderPanel{folderPanel.makeKeyAndOrderFront(nil);return}
         let panel=NSOpenPanel();panel.canChooseDirectories=true;panel.canChooseFiles=false;panel.canCreateDirectories=true;panel.allowsMultipleSelection=false;panel.prompt="Выбрать";panel.message="Папка для скриншотов и видео";panel.directoryURL=folder
@@ -373,7 +381,9 @@ private final class MovieEncoder:@unchecked Sendable {
 
 @MainActor final class DeskApplicationDelegate:NSObject,NSApplicationDelegate {
     weak var media:MediaCoordinator?
+    weak var builds:BuildLibrary?
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
+        if let builds,builds.installing{builds.message="Дождитесь завершения установки перед выходом";return .terminateCancel}
         guard let media,media.working || media.takingScreenshot else{return .terminateNow}
         Task{await media.finishBeforeQuit();sender.reply(toApplicationShouldTerminate:true)}
         return .terminateLater
@@ -384,22 +394,31 @@ struct MediaSidebar:View {
     @ObservedObject var model:DeskModel
     @ObservedObject var media:MediaCoordinator
     var edit:()->Void
+    @AppStorage("captureExpanded") private var expanded=true
     var body:some View {
         VStack(alignment:.leading,spacing:9){
-            Text("СЪЁМКА").font(.system(size:9,weight:.semibold)).foregroundStyle(.secondary)
-            Picker("Устройства для съёмки",selection:$media.choice){ForEach(CaptureChoice.allCases){choice in Text(media.title(choice)).tag(choice)}}.labelsHidden().controlSize(.small).disabled(media.working).accessibilityIdentifier("capture.target")
+            Button{withAnimation(.easeInOut(duration:0.16)){expanded.toggle()}}label:{HStack{Text("СЪЁМКА").font(.system(size:9,weight:.semibold));Spacer();Image(systemName:expanded ? "chevron.up" : "chevron.down").font(.system(size:9))}.foregroundStyle(.secondary).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("capture.header")
+            if expanded {
+            LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:4),count:3),spacing:4){
+                ForEach(CaptureChoice.allCases){choice in
+                    Button{media.choice=choice}label:{Text(media.shortTitle(choice)).font(.system(size:9,weight:.semibold)).lineLimit(1).minimumScaleFactor(0.75).frame(maxWidth:.infinity,minHeight:27).background(media.choice==choice ? Color(red:0.64,green:0.94,blue:0.18) : Color.white.opacity(0.07),in:RoundedRectangle(cornerRadius:6)).foregroundStyle(media.choice==choice ? Color.black : Color.primary)}
+                    .buttonStyle(.plain).disabled(media.working).help(media.title(choice)).accessibilityLabel(media.title(choice)).accessibilityIdentifier("capture.target.\(choice.rawValue)")
+                }
+            }
             HStack(spacing:5){
                 Button{Task{await media.screenshot()}}label:{Image(systemName:"camera").frame(maxWidth:.infinity)}.help("Скриншот сразу в папку").accessibilityLabel("Скриншот").accessibilityIdentifier("capture.screenshot")
                 Button{if media.editor != nil{edit()}else{Task{await media.screenshot(annotate:true);if media.editor != nil{edit()}}}}label:{Image(systemName:"pencil.tip.crop.circle").frame(maxWidth:.infinity)}.help(media.editor == nil ? "Скриншот с разметкой" : "Продолжить разметку").accessibilityLabel("Скриншот с разметкой").accessibilityIdentifier("capture.annotate")
             }.disabled(media.takingScreenshot || media.phase == .preparing || media.phase == .saving)
+            if !media.recording {
+                Button{media.startRecording()}label:{Label(media.phase == .saving ? "Сохраняю…" : media.phase == .preparing ? "Подготовка…" : "Записать",systemImage:"record.circle").frame(maxWidth:.infinity)}.disabled(media.working || media.takingScreenshot).accessibilityIdentifier("capture.record")
+            }
+            }
             if media.recording {
                 HStack(spacing:5){
                     Button{media.togglePause()}label:{Image(systemName:media.phase == .paused ? "play.fill" : "pause.fill").frame(maxWidth:.infinity)}.help(media.phase == .paused ? "Продолжить запись" : "Пауза").accessibilityLabel(media.phase == .paused ? "Продолжить запись" : "Пауза").accessibilityIdentifier("capture.pause")
                     Button{media.stopRecording()}label:{Image(systemName:"stop.fill").foregroundStyle(.red).frame(maxWidth:.infinity)}.help("Остановить и сохранить").accessibilityLabel("Остановить запись").accessibilityIdentifier("capture.stop")
                 }
                 Label(media.clock,systemImage:media.phase == .paused ? "pause.circle" : "record.circle").font(.system(size:12,design:.monospaced)).foregroundStyle(media.phase == .paused ? .orange : .red)
-            }else{
-                Button{media.startRecording()}label:{Label(media.phase == .saving ? "Сохраняю…" : media.phase == .preparing ? "Подготовка…" : "Записать",systemImage:"record.circle").frame(maxWidth:.infinity)}.disabled(media.working || media.takingScreenshot).accessibilityIdentifier("capture.record")
             }
             if media.takingScreenshot{ProgressView().controlSize(.mini)}
             if !media.notice.isEmpty{Text(media.notice).font(.system(size:10)).foregroundStyle(media.failed ? .orange : .secondary).lineLimit(4).help(media.notice).accessibilityIdentifier("capture.status")}

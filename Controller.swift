@@ -16,14 +16,14 @@ struct AndroidDevice: Identifiable {
 }
 
 enum LocalProcess {
-    static func run(_ path: String, _ arguments: [String], timeout: Double = 10) async -> (Int32, String) {
+    static func run(_ path: String, _ arguments: [String], timeout: Double = 10, captureErrors:Bool=false) async -> (Int32, String) {
         await Task.detached {
             let process = Process()
             let pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: path)
             process.arguments = arguments
             process.standardOutput = pipe
-            process.standardError = FileHandle.nullDevice
+            process.standardError = captureErrors ? pipe : FileHandle.nullDevice
             do { try process.run() } catch { return (-1, "") }
             let deadline = DispatchWorkItem { if process.isRunning { process.terminate() } }
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: deadline)
@@ -41,12 +41,17 @@ enum LocalProcess {
     @Published var refreshing=false
     @Published var accounts=AccountVault.accounts()
     @Published var accountSelection=["",""]
-    @Published var stands=["08","08"]
+    @Published var stands=["08","08"] {didSet{reconcileAccountSelection()}}
     @Published var iphoneAccount=""
-    @Published var iphoneStand="08"
+    @Published var iphoneStand="08" {didSet{reconcileAccountSelection()}}
+    @Published var closingSlots:Set<Int>=[]
     let authorizations=[AndroidAccountAction(),AndroidAccountAction()]
     let iosAuthorization=IOSAccountAction()
     let media=MediaCoordinator()
+    let deepLinks=DeepLinkCoordinator()
+    let builds=BuildLibrary()
+    @Published var installingDevices:Set<String>=[]
+    func isInstalling(_ slot:Int)->Bool{installingDevices.contains(selection[slot])}
     @Published var status="Подключите устройства по USB"
     @Published var adbPath:String { didSet { UserDefaults.standard.set(adbPath,forKey:"adbPath") } }
     @Published var autoConnect:Bool { didSet { UserDefaults.standard.set(autoConnect,forKey:"autoConnect") } }
@@ -62,9 +67,10 @@ enum LocalProcess {
         autoConnect=UserDefaults.standard.object(forKey:"autoConnect") as? Bool ?? true
         quality=UserDefaults.standard.object(forKey:"quality") as? Int ?? 1280
         fps=UserDefaults.standard.object(forKey:"fps") as? Int ?? 30
-        accountSelection=Array(repeating:accounts.first?.id ?? "",count:2)
-        iphoneAccount=accounts.first?.id ?? ""
+        reconcileAccountSelection()
         media.model=self
+        deepLinks.model=self
+        builds.model=self
     }
     func refresh() async {
         reloadAccounts()
@@ -111,7 +117,7 @@ enum LocalProcess {
         for i in 0..<2 { tasks[i]?.cancel();sessions[i].stop();authorizations[i].cancel() };iosAuthorization.cancel()
     }
     func choose(_ id:String,slot:Int) {
-        guard selection[slot] != id,!authorizations[slot].running,!authorizations[1-slot].running else { return }
+        guard selection[slot] != id,!authorizations[slot].running,!authorizations[1-slot].running,closingSlots.isEmpty,installingDevices.isEmpty else { return }
         let other=1-slot,previous=selection[slot]
         if selection[other]==id,!id.isEmpty {
             tasks[other]?.cancel();sessions[other].stop();selection[other]=previous
@@ -130,7 +136,7 @@ enum LocalProcess {
     }
     func openShortcut(_ shortcut:DeviceShortcut,slot:Int) {
         let serial=selection[slot]
-        guard !serial.isEmpty,sessions[slot].connected else{return}
+        guard !serial.isEmpty,sessions[slot].connected,!closingSlots.contains(slot),!isInstalling(slot) else{return}
         let adb=adbPath
         Task {
             let resolved=await LocalProcess.run(adb,["-s",serial,"shell","cmd","package","resolve-activity","--brief","-a","android.intent.action.MAIN","-c","android.intent.category.LAUNCHER","-p",shortcut.package])
@@ -141,22 +147,52 @@ enum LocalProcess {
             status=success ? "\(shortcut.title) открыт на выбранном устройстве" : "Не удалось открыть \(shortcut.title)"
         }
     }
+    func forceCloseCurrentApp(_ slot:Int){
+        let serial=selection[slot],adb=adbPath
+        guard !serial.isEmpty,sessions[slot].connected,!authorizations[slot].running,!closingSlots.contains(slot),!isInstalling(slot) else{return}
+        closingSlots.insert(slot)
+        status="Закрываю текущее приложение…"
+        Task {
+            defer{closingSlots.remove(slot)}
+            let current=await LocalProcess.run(adb,["-s",serial,"shell","dumpsys","activity","activities"],timeout:4)
+            guard current.0==0,let package=AndroidForeground.package(in:current.1) else{status="Не найдено текущее приложение";return}
+            let launcher=await LocalProcess.run(adb,["-s",serial,"shell","cmd","package","resolve-activity","--brief","-a","android.intent.action.MAIN","-c","android.intent.category.HOME"],timeout:3)
+            let home=launcher.1.split(separator:"\n").last(where:{$0.contains("/")})?.split(separator:"/").first.map(String.init)
+            guard launcher.0==0,home != nil else{status="Не удалось проверить системный интерфейс";return}
+            guard !AndroidForeground.isProtected(package,home:home) else{status="На экране системный интерфейс — закрывать нечего";return}
+            guard selection[slot]==serial,sessions[slot].connected else{return}
+            let result=await LocalProcess.run(adb,["-s",serial,"shell","am","force-stop","--user","current",package],timeout:4)
+            guard result.0==0 else{status="Не удалось закрыть приложение";return}
+            try? await Task.sleep(nanoseconds:200_000_000)
+            let after=await LocalProcess.run(adb,["-s",serial,"shell","dumpsys","activity","activities"],timeout:4)
+            guard after.0==0 else{status="Команда закрытия отправлена; проверьте экран";return}
+            let name=DeviceShortcut.allCases.first(where:{$0.package==package})?.title ?? package
+            status=AndroidForeground.package(in:after.1)==package ? "Приложение осталось открытым" : "\(name) закрыт принудительно"
+        }
+    }
     func showMirror() {
         guard let url=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.apple.ScreenContinuity") else { status="Видеоповтор iPhone не найден";return }
         NSWorkspace.shared.openApplication(at:url,configuration:NSWorkspace.OpenConfiguration()) { _,_ in }
     }
-    func reloadAccounts(){
-        accounts=AccountVault.accounts()
-        for i in 0..<2 {if !accounts.contains(where:{$0.id==accountSelection[i]}){accountSelection[i]=accounts.first?.id ?? ""}}
-        if !accounts.contains(where:{$0.id==iphoneAccount}){iphoneAccount=accounts.first?.id ?? ""}
+    func accounts(on stand:String)->[TestAccount]{accounts.filter{$0.stand==stand}}
+    var environmentLabel:String {
+        let chosen=QAEnvironment.all.filter{stands.contains($0.id) || iphoneStand==$0.id}
+        return chosen.map(\.title).joined(separator:" · ")
     }
+    func reconcileAccountSelection(){
+        for i in 0..<2 {let available=accounts(on:stands[i]);if !available.contains(where:{$0.id==accountSelection[i]}){accountSelection[i]=available.first?.id ?? ""}}
+        let available=accounts(on:iphoneStand)
+        if !available.contains(where:{$0.id==iphoneAccount}){iphoneAccount=available.first?.id ?? ""}
+    }
+    func reloadAccounts(){accounts=AccountVault.accounts();reconcileAccountSelection()}
     func login(_ slot:Int){
-        guard !selection[slot].isEmpty else{return}
-        guard let phone=AccountVault.read(accountSelection[slot]),let otp=AccountVault.read("otp") else{authorizations[slot].message="Добавьте аккаунт на вкладке «Аккаунты»";return}
+        guard !selection[slot].isEmpty,!isInstalling(slot) else{return}
+        guard accounts(on:stands[slot]).contains(where:{$0.id==accountSelection[slot]}),let phone=AccountVault.read(accountSelection[slot]),let otp=AccountVault.read("otp") else{authorizations[slot].message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         authorizations[slot].start(adb:adbPath,serial:selection[slot],phone:phone,otp:otp,stand:stands[slot])
     }
     func loginIPhone(){
-        guard let phone=AccountVault.read(iphoneAccount),let otp=AccountVault.read("otp") else{iosAuthorization.message="Добавьте аккаунт на вкладке «Аккаунты»";return}
+        guard !installingDevices.contains("iphone") else{return}
+        guard accounts(on:iphoneStand).contains(where:{$0.id==iphoneAccount}),let phone=AccountVault.read(iphoneAccount),let otp=AccountVault.read("otp") else{iosAuthorization.message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         iosAuthorization.start(phone:phone,otp:otp,stand:iphoneStand)
     }
     func chooseADB() {
@@ -195,19 +231,19 @@ struct PhonePanel:View {
                         Picker("Устройство",selection:Binding(get:{model.selection[slot]},set:{model.choose($0,slot:slot)})) {
                             Text("Выберите Android").tag("")
                             ForEach(model.devices){d in Text(d.name+(d.state=="device" ? "" : " · \(d.state)")).tag(d.id)}
-                        }.labelsHidden().disabled(session.busy || model.authorizations.contains(where:{$0.running}))
+                        }.labelsHidden().disabled(session.busy || model.authorizations.contains(where:{$0.running}) || !model.closingSlots.isEmpty || !model.installingDevices.isEmpty)
                         Button {model.toggle(slot)} label:{Image(systemName:session.busy ? "xmark" : session.connected ? "power" : "cable.connector")}
-                            .help(session.busy ? "Отменить подключение" : session.connected ? "Отключить" : "Подключить").disabled(model.selection[slot].isEmpty)
+                            .help(session.busy ? "Отменить подключение" : session.connected ? "Отключить" : "Подключить").disabled(model.selection[slot].isEmpty || model.closingSlots.contains(slot))
                     }
                     Text(model.devices.first(where:{$0.id==model.selection[slot]})?.build ?? "USB · Android").font(.system(size:10)).foregroundStyle(.secondary).lineLimit(1)
                     HStack(spacing:6){
                         Picker("Аккаунт",selection:$model.accountSelection[slot]) {
                             Text("Выберите аккаунт").tag("")
-                            ForEach(model.accounts){Text($0.label).tag($0.id)}
-                        }.labelsHidden().frame(maxWidth:.infinity).disabled(auth.running)
-                        Picker("Стенд",selection:$model.stands[slot]){Text("08").tag("08");Text("09").tag("09")}.labelsHidden().frame(width:58).help("Стенд").disabled(auth.running)
+                            ForEach(model.accounts(on:model.stands[slot])){Text($0.label).tag($0.id)}
+                        }.labelsHidden().frame(maxWidth:.infinity).disabled(auth.running || model.isInstalling(slot))
+                        Picker("Стенд",selection:$model.stands[slot]){ForEach(QAEnvironment.all){Text($0.shortTitle).tag($0.id)}}.labelsHidden().frame(width:66).help("Стенд").disabled(auth.running || model.isInstalling(slot))
                         if auth.running{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}.help("Остановить")}
-                        else{Button("Войти"){model.login(slot)}.accessibilityIdentifier("auth.android.\(slot).login").disabled(model.accountSelection[slot].isEmpty || model.selection[slot].isEmpty)}
+                        else{Button("Войти"){model.login(slot)}.accessibilityIdentifier("auth.android.\(slot).login").disabled(model.accountSelection[slot].isEmpty || model.selection[slot].isEmpty || model.isInstalling(slot))}
                     }
                 }.controlSize(.small).padding(.horizontal,10).padding(.bottom,10)
             }
@@ -236,6 +272,11 @@ struct PhonePanel:View {
                     Button{session.key(4)}label:{Image(systemName:"chevron.left")}.help("Назад")
                     Button{session.key(3)}label:{Image(systemName:"house")}.help("Домой")
                     Button{session.key(187)}label:{Image(systemName:"square.on.square")}.help("Недавние приложения")
+                    Button{model.forceCloseCurrentApp(slot)}label:{Image(systemName:"xmark.app").foregroundStyle(.red)}
+                        .help("Принудительно закрыть текущее приложение")
+                        .accessibilityLabel("Закрыть текущее приложение")
+                        .accessibilityIdentifier("device.\(slot).force-close")
+                        .disabled(auth.running || model.closingSlots.contains(slot))
                 }
                 Spacer(minLength:6)
                 HStack(spacing:9){
@@ -245,7 +286,7 @@ struct PhonePanel:View {
                             .accessibilityIdentifier("launch.\(slot).\(shortcut.rawValue)")
                     }
                 }
-            }.buttonStyle(.plain).font(.system(size:11)).disabled(!session.connected).padding(.horizontal,12).frame(height:36)
+            }.buttonStyle(.plain).font(.system(size:11)).disabled(!session.connected || model.isInstalling(slot)).padding(.horizontal,12).frame(height:36)
         }.frame(maxWidth:.infinity,maxHeight:.infinity)
             .background(Color.white.opacity(0.045),in:RoundedRectangle(cornerRadius:14))
             .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.white.opacity(0.06),lineWidth:1))
@@ -292,24 +333,26 @@ private struct PhoneDigitsField:NSViewRepresentable {
 }
 struct AccountsView:View {
     @ObservedObject var model:DeskModel
+    @State private var stand="08"
+    private var stageAccounts:[TestAccount]{model.accounts(on:stand)}
     @State private var selected=""
     @State private var draft=AccountDraft()
     @State private var drafts:[String:AccountDraft]=[:]
     @State private var notice=""
     @State private var isError=false
     @State private var loaded=false
-    private var currentIndex:Int? {model.accounts.firstIndex(where:{$0.id==selected})}
+    private var currentIndex:Int? {stageAccounts.firstIndex(where:{$0.id==selected})}
     private var currentPage:Int {currentIndex.map{$0+1} ?? 0}
     private var pages:[Int] {
-        let count=model.accounts.count
+        let count=stageAccounts.count
         let first=max(0,min((currentIndex ?? 0)-4,max(0,count-10)))
         return Array(first..<min(count,first+10))
     }
     private func load(_ id:String){
-        if loaded{drafts[selected]=draft}
+        if loaded{drafts[stand+":"+selected]=draft}
         selected=id;notice="";isError=false;loaded=true
-        if let cached=drafts[id]{draft=cached;return}
-        guard let account=model.accounts.first(where:{$0.id==id}) else{draft=AccountDraft();return}
+        if let cached=drafts[stand+":"+id]{draft=cached;return}
+        guard let account=stageAccounts.first(where:{$0.id==id}) else{draft=AccountDraft();return}
         let full=AccountVault.read(id) ?? ""
         draft=AccountDraft(name:account.name,role:account.role,digits:full.hasPrefix("258") ? String(full.dropFirst(3)) : full)
     }
@@ -321,40 +364,50 @@ struct AccountsView:View {
             guard !name.isEmpty else{throw AuthFailure("Укажите имя аккаунта")}
             let id=selected.isEmpty ? UUID().uuidString : selected
             try AccountVault.save(full,key:id)
-            let entry=TestAccount(id:id,name:name,role:draft.role.trimmingCharacters(in:.whitespacesAndNewlines))
+            let entry=TestAccount(id:id,name:name,role:draft.role.trimmingCharacters(in:.whitespacesAndNewlines),stand:stand)
             var all=model.accounts
             if let index=all.firstIndex(where:{$0.id==id}){all[index]=entry}else{all.append(entry)}
             AccountVault.saveAccounts(all);model.reloadAccounts()
-            if selected.isEmpty{drafts.removeValue(forKey:"")}
-            selected=id;draft.name=name;drafts[id]=draft;notice="Сохранено";isError=false
+            if selected.isEmpty{drafts.removeValue(forKey:stand+":")}
+            selected=id;draft.name=name;drafts[stand+":"+id]=draft;notice="Сохранено";isError=false
         }catch{notice=error.localizedDescription;isError=true}
     }
     private func remove(){
         let index=currentIndex ?? 0
-        AccountVault.remove(selected);drafts.removeValue(forKey:selected)
+        AccountVault.remove(selected);drafts.removeValue(forKey:stand+":"+selected)
         AccountVault.saveAccounts(model.accounts.filter{$0.id != selected});model.reloadAccounts()
         loaded=false
-        load(model.accounts.isEmpty ? "" : model.accounts[min(index,model.accounts.count-1)].id)
+        load(stageAccounts.isEmpty ? "" : stageAccounts[min(index,stageAccounts.count-1)].id)
     }
     var body:some View {
         VStack(alignment:.leading,spacing:22){
             HStack(alignment:.top){
-                VStack(alignment:.leading,spacing:5){Text("Аккаунты").font(.title2.bold());Text(selected.isEmpty ? "Новый тестовый аккаунт" : "Аккаунт \(currentPage) из \(model.accounts.count)").font(.callout).foregroundStyle(.secondary)}
+                VStack(alignment:.leading,spacing:5){Text("Аккаунты").font(.title2.bold());Text(selected.isEmpty ? "Новый тестовый аккаунт" : "Аккаунт \(currentPage) из \(stageAccounts.count)").font(.callout).foregroundStyle(.secondary)}
                 Spacer()
                 Button{load("")}label:{Label("Добавить",systemImage:"plus")}.accessibilityIdentifier("accounts.add")
             }
-            if !model.accounts.isEmpty {
+            HStack(spacing:3){
+                ForEach(QAEnvironment.all){environment in
+                    Button{
+                        drafts[stand+":"+selected]=draft;stand=environment.id;loaded=false
+                        load(stageAccounts.first?.id ?? "")
+                    }label:{Text(environment.shortTitle).font(.system(size:11,weight:.semibold)).frame(maxWidth:.infinity,minHeight:28).background(stand==environment.id ? accent : Color.white.opacity(0.06),in:RoundedRectangle(cornerRadius:6)).foregroundStyle(stand==environment.id ? Color.black : Color.primary)}
+                    .buttonStyle(.plain).help(environment.title).accessibilityIdentifier("accounts.stand.\(environment.id)")
+                }
+            }
+            if stageAccounts.isEmpty && selected.isEmpty {Text("На этом стенде пока нет аккаунтов").font(.caption).foregroundStyle(.secondary)}
+            if !stageAccounts.isEmpty {
                 HStack(spacing:4){
-                    Button{if let index=currentIndex,index>0{load(model.accounts[index-1].id)}}label:{Image(systemName:"chevron.left")}
+                    Button{if let index=currentIndex,index>0{load(stageAccounts[index-1].id)}}label:{Image(systemName:"chevron.left")}
                         .disabled(currentIndex==nil || currentIndex==0).help("Предыдущий аккаунт").accessibilityIdentifier("accounts.previous")
                     Spacer(minLength:0)
                     ForEach(pages,id:\.self){index in
-                        Button{load(model.accounts[index].id)}label:{Text("\(index+1)").font(.system(size:12,weight:.semibold)).frame(width:25,height:28).background(currentIndex==index ? accent : Color.white.opacity(0.06),in:RoundedRectangle(cornerRadius:7)).foregroundStyle(currentIndex==index ? Color.black : Color.primary)}
-                            .buttonStyle(.plain).help(model.accounts[index].label).accessibilityIdentifier("accounts.page.\(index+1)")
+                        Button{load(stageAccounts[index].id)}label:{Text("\(index+1)").font(.system(size:12,weight:.semibold)).frame(width:25,height:28).background(currentIndex==index ? accent : Color.white.opacity(0.06),in:RoundedRectangle(cornerRadius:7)).foregroundStyle(currentIndex==index ? Color.black : Color.primary)}
+                            .buttonStyle(.plain).help(stageAccounts[index].label).accessibilityIdentifier("accounts.page.\(index+1)")
                     }
                     Spacer(minLength:0)
-                    Button{if let index=currentIndex,index+1<model.accounts.count{load(model.accounts[index+1].id)}}label:{Image(systemName:"chevron.right")}
-                        .disabled(currentIndex==nil || currentIndex==model.accounts.count-1).help("Следующий аккаунт").accessibilityIdentifier("accounts.next")
+                    Button{if let index=currentIndex,index+1<stageAccounts.count{load(stageAccounts[index+1].id)}}label:{Image(systemName:"chevron.right")}
+                        .disabled(currentIndex==nil || currentIndex==stageAccounts.count-1).help("Следующий аккаунт").accessibilityIdentifier("accounts.next")
                 }.controlSize(.small).padding(10).background(Color.white.opacity(0.035),in:RoundedRectangle(cornerRadius:12))
             }
             VStack(alignment:.leading,spacing:18){
@@ -376,7 +429,7 @@ struct AccountsView:View {
                 Button("Сохранить"){save()}.keyboardShortcut(.defaultAction).accessibilityIdentifier("accounts.save")
             }
         }.padding(26).frame(minWidth:480,maxWidth:.infinity,minHeight:450,alignment:.topLeading).preferredColorScheme(.dark)
-            .onAppear{model.reloadAccounts();if !loaded{load(model.accounts.first?.id ?? "")}}
+            .onAppear{model.reloadAccounts();if !loaded{load(stageAccounts.first?.id ?? "")}}
     }
 }
 
@@ -391,11 +444,11 @@ struct IPhoneControls:View {
             }.buttonStyle(.plain).accessibilityIdentifier("device.iphone.header")
             if expanded {
                 VStack(alignment:.leading,spacing:8){
-                    Picker("Аккаунт",selection:$model.iphoneAccount){Text("Аккаунт").tag("");ForEach(model.accounts){Text($0.label).tag($0.id)}}.labelsHidden().disabled(auth.running)
+                    Picker("Аккаунт",selection:$model.iphoneAccount){Text("Аккаунт").tag("");ForEach(model.accounts(on:model.iphoneStand)){Text($0.label).tag($0.id)}}.labelsHidden().disabled(auth.running)
                     HStack{
-                        Picker("Стенд",selection:$model.iphoneStand){Text("08").tag("08");Text("09").tag("09")}.labelsHidden().disabled(auth.running)
+                        Picker("Стенд",selection:$model.iphoneStand){ForEach(QAEnvironment.all){Text($0.shortTitle).tag($0.id)}}.labelsHidden().disabled(auth.running)
                         if auth.running{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}}
-                        else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty)}
+                        else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
                     }
                     Button("Видеоповтор ↗"){model.showMirror()}
                 }.controlSize(.small).padding(.bottom,10)
@@ -427,6 +480,8 @@ struct SettingsView:View {
             Divider()
             MediaSettings(media:model.media)
             Divider()
+            DeepLinkSettings(coordinator:model.deepLinks)
+            Divider()
             Label("Видеоповтор iPhone — в отдельном окне",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
@@ -435,12 +490,13 @@ struct SettingsView:View {
 
 struct DeskView:View {
     @ObservedObject var model:DeskModel
-    private enum Tab {case devices,settings,accounts,annotation}
+    private enum Tab {case devices,builds,settings,accounts,annotation}
     @State private var tab:Tab = .devices
     @ObservedObject var media:MediaCoordinator
     var body:some View {
         HStack(spacing:0){
             VStack(alignment:.leading,spacing:22){
+                ScrollView{VStack(alignment:.leading,spacing:22){
                 VStack(alignment:.leading,spacing:10){
                 if let url=Bundle.main.url(forResource:"BrandMark",withExtension:"png"),let logo=NSImage(contentsOf:url){
                     Image(nsImage:logo).resizable().interpolation(.high).scaledToFit().frame(width:52,height:52)
@@ -448,14 +504,17 @@ struct DeskView:View {
                 }
                 VStack(alignment:.leading,spacing:18){
                 Button{tab = .devices}label:{Label("Устройства",systemImage:"rectangle.split.2x1").font(.system(size:12,weight:.medium))}.buttonStyle(.plain).foregroundStyle(tab == .devices ? accent : Color.secondary).accessibilityIdentifier("navigation.devices")
+                Button{tab = .builds}label:{Label("Сборки",systemImage:"shippingbox").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .builds ? accent : Color.secondary).accessibilityIdentifier("navigation.builds")
                 Button{tab = .settings}label:{Label("Настройки",systemImage:"slider.horizontal.3").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .settings ? accent : Color.secondary).accessibilityIdentifier("navigation.settings")
                 Button{tab = .accounts}label:{Label("Аккаунты",systemImage:"person.crop.circle").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .accounts ? accent : Color.secondary).accessibilityIdentifier("navigation.accounts")
                 }
                 }
+                DeepLinkSidebar(model:model,coordinator:model.deepLinks)
                 MediaSidebar(model:model,media:media){tab = .annotation}
+                }.frame(maxWidth:.infinity,alignment:.leading)}.scrollIndicators(.hidden)
                 Spacer(minLength:4)
                 IPhoneControls(model:model,auth:model.iosAuthorization)
-                Label("test08",systemImage:"network").font(.system(size:11)).foregroundStyle(.secondary)
+                Label(model.environmentLabel,systemImage:"network").font(.system(size:11)).foregroundStyle(.secondary).lineLimit(1).help(model.environmentLabel)
             }.padding(.horizontal,16).padding(.top,6).padding(.bottom,14).frame(width:154).background(Color.white.opacity(0.025))
             Divider()
             ZStack(alignment:.topLeading){
@@ -469,10 +528,12 @@ struct DeskView:View {
                 }.frame(height:14)
             }.padding(12)
                 .opacity(tab == .devices ? 1 : 0).allowsHitTesting(tab == .devices).disabled(tab != .devices).accessibilityHidden(tab != .devices)
-            AccountsView(model:model).frame(maxWidth:600).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+            ScrollView{AccountsView(model:model).frame(maxWidth:600)}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
                 .opacity(tab == .accounts ? 1 : 0).allowsHitTesting(tab == .accounts).disabled(tab != .accounts).accessibilityHidden(tab != .accounts)
             ScrollView{SettingsView(model:model).frame(maxWidth:600)}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
                 .opacity(tab == .settings ? 1 : 0).allowsHitTesting(tab == .settings).disabled(tab != .settings).accessibilityHidden(tab != .settings)
+            BuildsView(model:model,library:model.builds,active:tab == .builds).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+                .opacity(tab == .builds ? 1 : 0).allowsHitTesting(tab == .builds).disabled(tab != .builds).accessibilityHidden(tab != .builds)
             if let editor=media.editor{ScreenshotEditor(document:editor,media:media).opacity(tab == .annotation ? 1 : 0).allowsHitTesting(tab == .annotation).disabled(tab != .annotation).accessibilityHidden(tab != .annotation)}
             }
         }.frame(minWidth:720,minHeight:580).preferredColorScheme(.dark)
@@ -495,6 +556,6 @@ struct DeskView:View {
         return CGSize(width:max(760,min(1100,screen.width-360)),height:max(620,min(940,screen.height-36)))
     }
     var body:some Scene {
-        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
+        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
     }
 }
