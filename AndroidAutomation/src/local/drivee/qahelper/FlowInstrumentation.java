@@ -119,7 +119,7 @@ public class FlowInstrumentation extends Instrumentation {
     void fail(String s) throws Exception { throw new FlowError(s); }
     boolean phone(AccessibilityNodeInfo r){return findId(r,"ui_phone_layout_edit_text")!=null;}
     void tapId(String id) throws Exception { AccessibilityNodeInfo n=findId(root(),id);if(n==null)fail("element_missing");click(n); }
-    boolean standMatches(String value,String stand){return java.util.regex.Pattern.compile("(?i)test"+stand+"(?![0-9])").matcher(value).find();}
+    boolean standMatches(String value,String stand){return StandHost.matches(value,stand);}
     AccessibilityNodeInfo host(AccessibilityNodeInfo r,String stand){for(AccessibilityNodeInfo n:nodes(r))if(n.isVisibleToUser()&&str(n.getViewIdResourceName()).endsWith("/server_api_list_item_textview_hostname")&&standMatches(str(n.getText()),stand))return n;return null;}
     void ensurePhone() throws Exception {
         stage("open");
@@ -155,7 +155,7 @@ public class FlowInstrumentation extends Instrumentation {
     boolean authenticated(AccessibilityNodeInfo r){return findId(r,"main_floatingactionbutton_menu")!=null || (findId(r,"main_drawerlayout")!=null && findId(r,"driver_city_tab_orders")!=null);}
     void authenticate(JSONObject request) throws Exception {
         String number=request.optString("phone").replaceAll("[^0-9]",""),otp=request.optString("otp"),stand=request.optString("stand","08");
-        if(!number.startsWith("258")||number.length()!=11||!otp.matches("[0-9]{4}")||!stand.matches("0[89]"))fail("invalid_request");
+        if(!number.startsWith("258")||number.length()!=11||!otp.matches("[0-9]{4}")||!StandHost.valid(stand))fail("invalid_request");
         ensurePhone();selectStand(stand);stage("phone");
         AccessibilityNodeInfo flag=findId(root(),"ui_phone_layout_flag_layout");
         if(flag==null)fail("country_selector_missing");
