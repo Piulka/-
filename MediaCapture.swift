@@ -382,10 +382,13 @@ private final class MovieEncoder:@unchecked Sendable {
 @MainActor final class DeskApplicationDelegate:NSObject,NSApplicationDelegate {
     weak var media:MediaCoordinator?
     weak var builds:BuildLibrary?
+    weak var androidRepeat:AndroidRepeat?
+    weak var mirrorDock:MirrorDock?
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         if let builds,builds.installing{builds.message="Дождитесь завершения установки перед выходом";return .terminateCancel}
-        guard let media,media.working || media.takingScreenshot else{return .terminateNow}
-        Task{await media.finishBeforeQuit();sender.reply(toApplicationShouldTerminate:true)}
+        mirrorDock?.disable()
+        guard media?.working == true || media?.takingScreenshot == true || androidRepeat?.engaged == true else{return .terminateNow}
+        Task{await androidRepeat?.stop();await media?.finishBeforeQuit();sender.reply(toApplicationShouldTerminate:true)}
         return .terminateLater
     }
 }

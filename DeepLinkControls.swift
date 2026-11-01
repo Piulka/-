@@ -21,6 +21,7 @@ import SwiftUI
     func open(){
         guard !running,let model,let preset=presets.first(where:{$0.id==selected}) else{return}
         let destination=target
+        if destination<2,model.androidRepeat.engaged{message="Сначала выключите повтор нажатий";failed=true;return}
         if destination<2 ? model.isInstalling(destination) : model.installingDevices.contains("iphone"){message="Дождитесь установки сборки";failed=true;return}
         if destination<2,model.authorizations[destination].running || model.closingSlots.contains(destination){message="Дождитесь завершения действия на телефоне";failed=true;return}
         if destination==2,model.iosAuthorization.running{message="Дождитесь завершения входа iPhone";failed=true;return}

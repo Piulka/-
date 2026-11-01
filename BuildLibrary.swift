@@ -118,6 +118,7 @@ import SwiftUI
     func install(){
         guard canInstall,let file=selected,let metadata=file.metadata,let target=compatibleTargets.first(where:{$0.id==targetID}),let model else{return}
         let key=target.platform == .ios ? "iphone" : target.id
+        if target.platform == .android,model.androidRepeat.engaged{message="Сначала выключите повтор нажатий";failed=true;return}
         if target.platform == .ios ? model.iosAuthorization.running : model.authorizations.enumerated().contains(where:{model.selection[$0.offset]==target.id && $0.element.running}) || model.closingSlots.contains(where:{model.selection[$0]==target.id}){message="Дождитесь завершения действия на телефоне";failed=true;return}
         guard !model.installingDevices.contains(key) else{return}
         installing=true;model.installingDevices.insert(key);message="Подготавливаю \(file.url.lastPathComponent)…";failed=false

@@ -3,4 +3,5 @@
 <queries><package android:name="com.drivee.taxi.rides"/></queries>
 <application android:debuggable="true" android:label="Drivee QA Automation" android:allowBackup="false"/>
 <instrumentation android:name="local.drivee.qahelper.FlowInstrumentation" android:targetPackage="local.drivee.qahelper" android:label="Drivee QA Automation"/>
+<instrumentation android:name="local.drivee.qahelper.SyncInstrumentation" android:targetPackage="local.drivee.qahelper" android:label="Жмякее · повтор"/>
 </manifest>

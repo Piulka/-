@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Combine
 
 enum DeviceShortcut:String,CaseIterable,Identifiable {
     case drivee,deeplink,geo
@@ -50,6 +51,11 @@ enum LocalProcess {
     let media=MediaCoordinator()
     let deepLinks=DeepLinkCoordinator()
     let builds=BuildLibrary()
+    let androidRepeat=AndroidRepeat()
+    let mirrorDock=MirrorDock()
+    private var repeatObservation:AnyCancellable?
+    private var mirrorObservation:AnyCancellable?
+    private var connectionObservation:AnyCancellable?
     @Published var installingDevices:Set<String>=[]
     func isInstalling(_ slot:Int)->Bool{installingDevices.contains(selection[slot])}
     @Published var status="Подключите устройства по USB"
@@ -71,6 +77,15 @@ enum LocalProcess {
         media.model=self
         deepLinks.model=self
         builds.model=self
+        androidRepeat.model=self
+        repeatObservation=androidRepeat.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
+        mirrorObservation=mirrorDock.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
+        connectionObservation=Publishers.MergeMany(sessions.map{$0.$connected.removeDuplicates().map{_ in ()}.eraseToAnyPublisher()}).sink{[weak self] _ in
+            Task{@MainActor in
+                guard let self else{return};self.objectWillChange.send()
+                if self.androidRepeat.engaged,!self.sessions.allSatisfy({$0.connected}){await self.androidRepeat.stop(message:"Поток отключён · повтор выключен")}
+            }
+        }
     }
     func refresh() async {
         reloadAccounts()
@@ -95,6 +110,7 @@ enum LocalProcess {
         }
         devices=found.sorted{$0.name<$1.name}
         let ready=devices.filter{$0.state=="device"}
+        if androidRepeat.engaged,!selection.allSatisfy({serial in ready.contains{$0.id==serial}}){await androidRepeat.stop(message:"Устройство отключено · повтор выключен")}
         for i in 0..<2 {
             if selection[i].isEmpty,let d=ready.first(where:{!selection.contains($0.id)}) { selection[i]=d.id }
             if !selection[i].isEmpty,!ready.contains(where:{$0.id==selection[i]}) { sessions[i].stop() }
@@ -114,9 +130,12 @@ enum LocalProcess {
         if state != Set(devices.map{$0.id+":"+$0.state}) { await refresh() }
     }
     func stopAll() {
+        mirrorDock.disable()
+        Task{await androidRepeat.stop()}
         for i in 0..<2 { tasks[i]?.cancel();sessions[i].stop();authorizations[i].cancel() };iosAuthorization.cancel()
     }
     func choose(_ id:String,slot:Int) {
+        guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         guard selection[slot] != id,!authorizations[slot].running,!authorizations[1-slot].running,closingSlots.isEmpty,installingDevices.isEmpty else { return }
         let other=1-slot,previous=selection[slot]
         if selection[other]==id,!id.isEmpty {
@@ -132,9 +151,11 @@ enum LocalProcess {
         tasks[slot]=Task { await sessions[slot].start(serial:d.id,adb:adbPath,maxSize:quality,fps:fps) }
     }
     func toggle(_ slot:Int) {
+        guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         if sessions[slot].connected || sessions[slot].busy { tasks[slot]?.cancel();sessions[slot].stop() } else { connect(slot) }
     }
     func openShortcut(_ shortcut:DeviceShortcut,slot:Int) {
+        guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         let serial=selection[slot]
         guard !serial.isEmpty,sessions[slot].connected,!closingSlots.contains(slot),!isInstalling(slot) else{return}
         let adb=adbPath
@@ -148,6 +169,7 @@ enum LocalProcess {
         }
     }
     func forceCloseCurrentApp(_ slot:Int){
+        guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         let serial=selection[slot],adb=adbPath
         guard !serial.isEmpty,sessions[slot].connected,!authorizations[slot].running,!closingSlots.contains(slot),!isInstalling(slot) else{return}
         closingSlots.insert(slot)
@@ -186,6 +208,7 @@ enum LocalProcess {
     }
     func reloadAccounts(){accounts=AccountVault.accounts();reconcileAccountSelection()}
     func login(_ slot:Int){
+        guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         guard !selection[slot].isEmpty,!isInstalling(slot) else{return}
         guard accounts(on:stands[slot]).contains(where:{$0.id==accountSelection[slot]}),let phone=AccountVault.read(accountSelection[slot]),let otp=AccountVault.read("otp") else{authorizations[slot].message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         authorizations[slot].start(adb:adbPath,serial:selection[slot],phone:phone,otp:otp,stand:stands[slot])
@@ -194,6 +217,10 @@ enum LocalProcess {
         guard !installingDevices.contains("iphone") else{return}
         guard accounts(on:iphoneStand).contains(where:{$0.id==iphoneAccount}),let phone=AccountVault.read(iphoneAccount),let otp=AccountVault.read("otp") else{iosAuthorization.message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         iosAuthorization.start(phone:phone,otp:otp,stand:iphoneStand)
+    }
+    func navigation(_ code:UInt32,slot:Int){
+        sessions[slot].key(code)
+        if androidRepeat.enabled{sessions[1-slot].key(code)}
     }
     func chooseADB() {
         let picker=NSOpenPanel();picker.canChooseDirectories=false;picker.canChooseFiles=true;picker.message="Выберите исполняемый файл adb"
@@ -269,9 +296,9 @@ struct PhonePanel:View {
             }.clipShape(RoundedRectangle(cornerRadius:11)).padding(.horizontal,6)
             HStack(spacing:8){
                 HStack(spacing:12){
-                    Button{session.key(4)}label:{Image(systemName:"chevron.left")}.help("Назад")
-                    Button{session.key(3)}label:{Image(systemName:"house")}.help("Домой")
-                    Button{session.key(187)}label:{Image(systemName:"square.on.square")}.help("Недавние приложения")
+                    Button{model.navigation(4,slot:slot)}label:{Image(systemName:"chevron.left")}.help("Назад")
+                    Button{model.navigation(3,slot:slot)}label:{Image(systemName:"house")}.help("Домой")
+                    Button{model.navigation(187,slot:slot)}label:{Image(systemName:"square.on.square")}.help("Недавние приложения")
                     Button{model.forceCloseCurrentApp(slot)}label:{Image(systemName:"xmark.app").foregroundStyle(.red)}
                         .help("Принудительно закрыть текущее приложение")
                         .accessibilityLabel("Закрыть текущее приложение")
@@ -451,6 +478,10 @@ struct IPhoneControls:View {
                         else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
                     }
                     Button("Видеоповтор ↗"){model.showMirror()}
+                    Toggle("Прикрепить iPhone",isOn:Binding(get:{model.mirrorDock.enabled},set:{model.mirrorDock.setEnabled($0)})).toggleStyle(.switch).controlSize(.mini).disabled(auth.running).accessibilityIdentifier("mirror.dock")
+                        .help("Эксперимент: настоящее окно Apple размещается в третьей области. Технически остаётся отдельным окном macOS.")
+                    if model.mirrorDock.enabled && model.mirrorDock.inside{Button("Разместить рядом"){model.mirrorDock.moveAlongside()}.controlSize(.mini).disabled(auth.running)}
+                    if !model.mirrorDock.message.isEmpty{Text(model.mirrorDock.message).font(.system(size:9)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
                 }.controlSize(.small).padding(.bottom,10)
             }
             if !auth.message.isEmpty{
@@ -482,7 +513,7 @@ struct SettingsView:View {
             Divider()
             DeepLinkSettings(coordinator:model.deepLinks)
             Divider()
-            Label("Видеоповтор iPhone — в отдельном окне",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
+            Label("Блок iPhone → «Прикрепить iPhone»: третья область или закрепление рядом. Используется настоящее окно Apple с прямым управлением.",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
     }
@@ -510,6 +541,7 @@ struct DeskView:View {
                 }
                 }
                 DeepLinkSidebar(model:model,coordinator:model.deepLinks)
+                RepeatSidebar(model:model,sync:model.androidRepeat)
                 MediaSidebar(model:model,media:media){tab = .annotation}
                 }.frame(maxWidth:.infinity,alignment:.leading)}.scrollIndicators(.hidden)
                 Spacer(minLength:4)
@@ -536,6 +568,10 @@ struct DeskView:View {
                 .opacity(tab == .builds ? 1 : 0).allowsHitTesting(tab == .builds).disabled(tab != .builds).accessibilityHidden(tab != .builds)
             if let editor=media.editor{ScreenshotEditor(document:editor,media:media).opacity(tab == .annotation ? 1 : 0).allowsHitTesting(tab == .annotation).disabled(tab != .annotation).accessibilityHidden(tab != .annotation)}
             }
+            if model.mirrorDock.enabled && model.mirrorDock.inside{
+                Divider()
+                MirrorSlot(dock:model.mirrorDock).frame(width:model.mirrorDock.width).padding(.vertical,8)
+            }
         }.frame(minWidth:720,minHeight:580).preferredColorScheme(.dark)
             .task{
                 await model.refresh()
@@ -556,6 +592,6 @@ struct DeskView:View {
         return CGSize(width:max(760,min(1100,screen.width-360)),height:max(620,min(940,screen.height-36)))
     }
     var body:some Scene {
-        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
+        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;delegate.androidRepeat=model.androidRepeat;delegate.mirrorDock=model.mirrorDock;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
     }
 }
