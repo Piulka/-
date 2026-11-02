@@ -63,18 +63,19 @@
           if (check.door !== task.value || check.other !== current.other) throw failure('admin_verify_failed');
         }
         saved = true;
+        return { ok: true, code: 'admin_saved', door: task.value, saved, go: false, php: false };
       }
       // Same operations as the two admin utilities; no other cache endpoints are used.
       const goPage = await request('/podval/gocache/index');
       const goDoc = new DOMParser().parseFromString(goPage, 'text/html');
       if (!goDoc.querySelector('#cleargo') || !goDoc.querySelector('#reason')) throw failure('admin_page_changed');
       mutation = true;
-      await request('/podval/gocache/cache', 'POST', new URLSearchParams({ reason: 'Жмякее · test08 · Калуга · ' + (saved ? 'Door to Door' : 'сброс GO + PHP') }), csrfHeader(goPage));
+      await request('/podval/gocache/cache', 'POST', new URLSearchParams({ reason: 'Жмякее · test08 · Калуга · сброс GO + PHP' }), csrfHeader(goPage));
       go = true;
       const phpText = await request('/podval/stat/clearcache');
       if (phpText.trim() !== 'Yii cache cleared') throw failure('admin_php_unverified');
       php = true;
-      return { ok: true, code: saved ? 'admin_saved' : 'admin_cache_done', ...(saved ? { door: task.value } : {}), saved, go, php };
+      return { ok: true, code: 'admin_cache_done', saved, go, php };
     } catch (error) {
       // No HTML, server messages, CSRF, phone, cookies or credentials cross the bridge.
       return { ok: false, code: saved || go || php ? 'admin_partial' : mutation ? 'admin_unverified' : (error.code || 'admin_connection_error'), saved, go, php };

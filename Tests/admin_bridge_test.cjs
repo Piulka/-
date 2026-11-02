@@ -53,7 +53,8 @@ async function scenario(operation, options = {}) {
 }
 module.exports=(async()=>{
   let r=await scenario('admin_read');assert.equal(r.result.code,'admin_loaded');assert.equal(r.calls.length,1);
-  r=await scenario('admin_door');assert.equal(r.result.ok,true);assert.equal(r.result.door,'disabled');assert.equal(r.result.saved,true);assert.equal(r.result.go,true);assert.equal(r.result.php,true);
+  r=await scenario('admin_door');assert.equal(r.result.ok,true);assert.equal(r.result.door,'disabled');assert.equal(r.result.saved,true);assert.equal(r.result.go,false);assert.equal(r.result.php,false);
+  assert.equal(r.calls.some(x=>x.url.includes('/gocache/') || x.url.includes('/stat/clearcache')),false);
   assert.equal(r.calls.filter(x=>x.url.includes('/ordertypecitysettings/update')).length,1);
   r=await scenario('admin_cache');assert.equal(r.result.ok,true);assert.equal(r.calls.filter(x=>x.url.includes('/ordertypecitysettings/update')).length,0);
   for(const options of [{stand:'09'},{city:591},{stale:true},{value:'other'},{origin:'https://test09-podval.int.indels.dev'}]) {
@@ -66,7 +67,7 @@ module.exports=(async()=>{
   for(const options of [{verifyFail:true},{sideEffect:true}]) {
     r=await scenario('admin_door',options);assert.equal(r.result.code,'admin_unverified');assert.equal(r.calls.some(x=>x.url.includes('gocache')),false);
   }
-  r=await scenario('admin_door',{goFail:true});assert.equal(r.result.code,'admin_partial');assert.equal(r.result.saved,true);assert.equal(r.result.go,false);
+  r=await scenario('admin_cache',{goFail:true});assert.equal(r.result.code,'admin_unverified');assert.equal(r.result.saved,false);assert.equal(r.result.go,false);
   r=await scenario('admin_cache',{phpFail:true});assert.equal(r.result.code,'admin_partial');assert.equal(r.result.go,true);assert.equal(r.result.php,false);
   console.log('Admin scope, partial field update, stale-state conflicts, verification and partial cache results: passed');
 })();

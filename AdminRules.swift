@@ -10,11 +10,11 @@ enum AdminRules {
             guard code == "admin_loaded",let door=result["door"] as? String,states.contains(door) else{return nil}
             return "Настройки загружены из админки"
         }
-        guard result["go"] as? Bool == true,result["php"] as? Bool == true else{return nil}
         if action == "admin_door"{
             guard code == "admin_saved",result["saved"] as? Bool == true,result["door"] as? String == value,let value,states.contains(value) else{return nil}
-            return "Door to Door сохранён · PHP очищен · GO применит сброс примерно через 10 с"
+            return "Door to Door сохранён"
         }
+        guard result["go"] as? Bool == true,result["php"] as? Bool == true else{return nil}
         return action == "admin_cache" && code == "admin_cache_done" ? "PHP очищен · запрос сброса GO принят (примерно 10 с)" : nil
     }
     static func message(_ code:String,saved:Bool=false,go:Bool=false,php:Bool=false)->String {

@@ -65,7 +65,7 @@ import SwiftUI
         guard admin || action == "ping" || phone.map({OTPRules.valid(phone:$0,stand:"08")}) == true else{failed=true;message=OTPRules.message("invalid_phone");return}
         if action == "admin_door",!(AdminRules.states.contains(value ?? "") && AdminRules.states.contains(expected ?? "")){report(AdminRules.message("invalid_request"),error:true);return}
         working=true;accountID=id
-        report(admin ? (action == "admin_read" ? "Загружаю настройки…" : action == "admin_cache" ? "Сбрасываю GO + PHP…" : "Сохраняю Door to Door и сбрасываю кэш…") : action == "reset" ? "Сбрасываю OTP test08…" : "Проверяю RedisInsight…")
+        report(admin ? (action == "admin_read" ? "Загружаю настройки…" : action == "admin_cache" ? "Сбрасываю GO + PHP…" : "Сохраняю Door to Door…") : action == "reset" ? "Сбрасываю OTP test08…" : "Проверяю RedisInsight…")
         operation=Task{[self] in
             defer{working=false;operation=nil}
             let queue=root.appendingPathComponent("queue",isDirectory:true),requestID=UUID().uuidString

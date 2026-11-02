@@ -17,7 +17,7 @@ struct AdminView:View {
                 Text("Door to Door").font(.headline)
                 if bridge.adminDoor != nil{
                     Picker("Door to Door",selection:$draft){Text("Включен").tag("enabled");Text("Отключен").tag("disabled")}.pickerStyle(.segmented).labelsHidden().frame(maxWidth:300).disabled(bridge.working).accessibilityIdentifier("admin.door")
-                    Button("Сохранить и сбросить кэш"){
+                    Button("Сохранить"){
                         if let current=bridge.adminDoor{bridge.saveDoor(draft,expected:current)}
                     }.disabled(bridge.working || !AdminRules.states.contains(draft) || draft == bridge.adminDoor).accessibilityIdentifier("admin.save")
                 }else{Text("Нажмите «Обновить», чтобы прочитать текущее значение.").font(.callout).foregroundStyle(.secondary)}
