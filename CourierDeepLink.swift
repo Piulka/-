@@ -46,10 +46,10 @@ struct CourierPreset:Identifiable,Codable,Equatable {
         guard ["","true","false"].contains(doorToDoor) else{try fail("Проверьте доставку до двери")}
         let data=try JSONSerialization.data(withJSONObject:route,options:[.sortedKeys])
         var query=[URLQueryItem(name:"route",value:String(decoding:data,as:UTF8.self)),URLQueryItem(name:"price",value:normalized)]
-        if forIPhone {
-            // iOS build 16803 accepts the documented coordinate form, but ignores route JSON.
-            // Refuse to silently discard intermediate points on this transport.
-            guard stops.count==2 else{try fail("Для iPhone пока доступны пресеты из двух точек")}
+        if forIPhone || mode == .city {
+            // City accepts the documented start/end coordinates on both platforms.
+            // Older iOS courier builds use them too. Keep route and optional fields intact.
+            guard stops.count==2 else{try fail(mode == .city ? "Для города пока доступны пресеты из двух точек" : "Для iPhone пока доступны пресеты из двух точек")}
             for (key,value) in [("start_latitude",route[0]["latitude"]!),("start_longitude",route[0]["longitude"]!),("end_latitude",route[1]["latitude"]!),("end_longitude",route[1]["longitude"]!)]{query.append(URLQueryItem(name:key,value:String(describing:value)))}
         }
         for (key,value) in [("payment_type_id",paymentType),("description",comment),("entrance",entrance),("recipient_phone",recipientPhone),("door_to_door",doorToDoor),("sender_specifying_address",senderAddress),("recipient_specifying_address",recipientAddress)] where !value.isEmpty {query.append(URLQueryItem(name:key,value:value))}

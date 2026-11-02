@@ -34,7 +34,12 @@ import Foundation
         for ios in [false,true] {
             let courier=URLComponents(url:try full.url(forIPhone:ios,mode:.courier),resolvingAgainstBaseURL:false)!
             let city=URLComponents(url:try full.url(forIPhone:ios,mode:.city),resolvingAgainstBaseURL:false)!
-            precondition(city.path == "/client/appcity" && city.queryItems == courier.queryItems)
+            precondition(city.path == "/client/appcity")
+            for item in courier.queryItems! {precondition(city.queryItems!.contains(item))}
+            let query=Dictionary(uniqueKeysWithValues:city.queryItems!.map{($0.name,$0.value!)})
+            precondition(query["start_latitude"]==full.stops[0].latitude && query["start_longitude"]==full.stops[0].longitude)
+            precondition(query["end_latitude"]==full.stops[1].latitude && query["end_longitude"]==full.stops[1].longitude)
+            precondition(query["order_type_name"]==nil)
         }
         let fullQuery=try items(full),minimalQuery=try items(minimal)
         precondition(fullQuery.count==9 && minimalQuery.count==2)
@@ -46,6 +51,7 @@ import Foundation
         var multi=full;multi.stops.append(CourierStop(address:"C",latitude:"54.500468",longitude:"36.174441"))
         _=try multi.url()
         do{_=try multi.url(forIPhone:true);preconditionFailure("Intermediate point lost")}catch is DeepLinkFailure{}
+        do{_=try multi.url(mode:.city);preconditionFailure("City intermediate point lost")}catch is DeepLinkFailure{}
         var custom=minimal
         custom.name="Cyrillic & encoding";custom.stops[0].address="улица А & Б, 2/3 + вход 'С'";custom.comment="тест &price=1 + ? # %";custom.price="420,50";custom.doorToDoor="false"
         let query=try items(custom),url=try custom.url()

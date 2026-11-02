@@ -145,7 +145,7 @@ struct DeepLinkSettings:View {
             Picker("От двери до двери",selection:$draft.doorToDoor){Text("Не передавать").tag("");Text("Да").tag("true");Text("Нет").tag("false")}
             field("Подъезд / этаж / квартира отправителя","Не передавать",$draft.senderAddress)
             field("Подъезд / этаж / квартира получателя","Не передавать",$draft.recipientAddress)
-            Text("Пустые необязательные поля не передаются. Примеры A / B взяты из документации. Для iPhone — две точки; Android поддерживает промежуточные адреса.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+            Text("Пустые необязательные поля не передаются. Примеры A / B взяты из документации. Для города и iPhone — две точки; курьер на Android поддерживает промежуточные адреса.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
             HStack{
                 if !selected.isEmpty{Button("Удалить",role:.destructive){coordinator.presets.removeAll{$0.id==selected};drafts.removeValue(forKey:selected);loaded=false;load(coordinator.presets.first?.id ?? "")}.accessibilityIdentifier("deeplink.settings.delete")}
                 Spacer()
