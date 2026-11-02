@@ -16,4 +16,6 @@ jdk='/Applications/Android Studio.app/Contents/jbr/Contents/Home'
 "$jdk/bin/java" -cp "$test_dir" local.drivee.qahelper.TapTreeTests
 swiftc -parse-as-library BuildModels.swift Tests/BuildModelsTests.swift -o "$test_dir/build-models-tests"
 "$test_dir/build-models-tests"
+swiftc -parse-as-library MediaClipboard.swift Tests/MediaClipboardTests.swift -o "$test_dir/media-clipboard-tests"
+"$test_dir/media-clipboard-tests"
 python3 -B -m unittest discover -s Tests -p '*_test.py'

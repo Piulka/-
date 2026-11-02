@@ -327,7 +327,8 @@ private final class MovieEncoder:@unchecked Sendable {
             if annotate{editor=AnnotationDocument(image:image,names:names);return}
             let url=try destination(names:names,kind:"screen",ext:"png")
             try await Task.detached(priority:.userInitiated){try FrameCompositor.savePNG(image,to:url)}.value
-            lastURL=url;notice="Скриншот сохранён";failed=false
+            let copied=MediaClipboard.screenshot(image,file:url)
+            lastURL=url;notice=copied ? "Скриншот сохранён и скопирован" : "Скриншот сохранён · буфер недоступен";failed = !copied
         }catch{report(error.localizedDescription)}
     }
     func saveEdited()async {
@@ -335,7 +336,8 @@ private final class MovieEncoder:@unchecked Sendable {
         do {
             let image=try editor.export(),url=try destination(names:editor.names,kind:"marked",ext:"png")
             try await Task.detached(priority:.userInitiated){try FrameCompositor.savePNG(image,to:url)}.value
-            self.editor=nil;lastURL=url;notice="Скриншот с разметкой сохранён";failed=false
+            let copied=MediaClipboard.screenshot(image,file:url)
+            self.editor=nil;lastURL=url;notice=copied ? "Разметка сохранена и скопирована" : "Разметка сохранена · буфер недоступен";failed = !copied
         }catch{report(error.localizedDescription)}
     }
     func startRecording(){
@@ -365,7 +367,9 @@ private final class MovieEncoder:@unchecked Sendable {
                 }
                 let time=activeTime();elapsed=time;phase = .saving
                 let saved=try await movie.finish(seconds:time);encoder=nil
-                lastURL=saved;notice=interruption.map{"\($0). Видео сохранено"} ?? "Видео сохранено";failed=interruption != nil
+                let copied=MediaClipboard.video(saved)
+                let result=copied ? "Видео сохранено и скопировано" : "Видео сохранено · буфер недоступен"
+                lastURL=saved;notice=interruption.map{"\($0). \(result)"} ?? result;failed=interruption != nil || !copied
             }catch{encoder?.discard();report(error.localizedDescription)}
             if let source=mirror{await source.stop();mirror=nil}
         }
@@ -407,7 +411,7 @@ struct MediaSidebar:View {
                 }
             }
             HStack(spacing:5){
-                Button{Task{await media.screenshot()}}label:{Image(systemName:"camera").frame(maxWidth:.infinity)}.help("Скриншот сразу в папку").accessibilityLabel("Скриншот").accessibilityIdentifier("capture.screenshot")
+                Button{Task{await media.screenshot()}}label:{Image(systemName:"camera").frame(maxWidth:.infinity)}.help("Скриншот в папку и буфер обмена").accessibilityLabel("Скриншот").accessibilityIdentifier("capture.screenshot")
                 Button{if media.editor != nil{edit()}else{Task{await media.screenshot(annotate:true);if media.editor != nil{edit()}}}}label:{Image(systemName:"pencil.tip.crop.circle").frame(maxWidth:.infinity)}.help(media.editor == nil ? "Скриншот с разметкой" : "Продолжить разметку").accessibilityLabel("Скриншот с разметкой").accessibilityIdentifier("capture.annotate")
             }.disabled(media.takingScreenshot || media.phase == .preparing || media.phase == .saving)
             if !media.recording {
