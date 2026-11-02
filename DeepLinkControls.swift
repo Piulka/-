@@ -6,6 +6,8 @@ import SwiftUI
     @Published var presets:[CourierPreset] {didSet{if let data=try? JSONEncoder().encode(presets){UserDefaults.standard.set(data,forKey:"courierPresets")};if !presets.contains(where:{$0.id==selected}){selected=presets.first?.id ?? ""}}}
     @Published var selected="full"
     @Published var target=0
+    @Published var input:DeepLinkInput = .preset {didSet{message="";failed=false}}
+    @Published var readyLink="" // Session only: pasted links may contain private parameters.
     @Published var mode:ClientLinkMode {didSet{UserDefaults.standard.set(mode.rawValue,forKey:"clientLinkMode")}}
     @Published var running=false
     @Published var message=""
@@ -21,14 +23,19 @@ import SwiftUI
         selected=preset.id
     }
     func open(){
-        guard !running,let model,let preset=presets.first(where:{$0.id==selected}) else{return}
+        guard !running,let model else{return}
         let destination=target
         if destination<2,model.androidRepeat.engaged{message="Сначала выключите повтор нажатий";failed=true;return}
         if destination<2 ? model.isInstalling(destination) : model.installingDevices.contains("iphone"){message="Дождитесь установки сборки";failed=true;return}
         if destination<2,model.authorizations[destination].running || model.closingSlots.contains(destination){message="Дождитесь завершения действия на телефоне";failed=true;return}
         if destination==2,model.iosAuthorization.running{message="Дождитесь завершения входа iPhone";failed=true;return}
         do {
-            let url=try preset.url(forIPhone:destination==2,mode:mode)
+            let url:URL
+            if input == .ready{url=try ReadyDeepLink.url(readyLink)}
+            else{
+                guard let preset=presets.first(where:{$0.id==selected}) else{throw DeepLinkFailure("Выберите пресет")}
+                url=try preset.url(forIPhone:destination==2,mode:mode)
+            }
             let serial=destination<2 ? model.selection[destination] : ""
             guard destination==2 || !serial.isEmpty else{throw DeepLinkFailure("Выберите Android на вкладке устройств")}
             running=true;failed=false;message="Открываю форму…"
@@ -73,9 +80,13 @@ struct DeepLinkSidebar:View {
         VStack(alignment:.leading,spacing:8){
             Button{withAnimation(.easeInOut(duration:0.16)){expanded.toggle()}}label:{HStack{Text("ДИПЛИНКИ").font(.system(size:9,weight:.semibold));Spacer();Image(systemName:expanded ? "chevron.up" : "chevron.down").font(.system(size:9))}.foregroundStyle(.secondary).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("deeplink.header")
             if expanded {
+                Picker("Источник",selection:$coordinator.input){ForEach(DeepLinkInput.allCases){input in Text(input.title).tag(input)}}
+                    .pickerStyle(.segmented).labelsHidden().disabled(coordinator.running).accessibilityIdentifier("deeplink.input")
+                if coordinator.input == .preset {
                 Picker("Форма",selection:$coordinator.mode){ForEach(ClientLinkMode.allCases){mode in Text(mode.title).tag(mode)}}
                     .pickerStyle(.segmented).labelsHidden().disabled(coordinator.running).accessibilityIdentifier("deeplink.mode")
                     .help("drivee://open/client/"+coordinator.mode.rawValue)
+                }
                 LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:4),count:3),spacing:4){
                     ForEach(0..<3,id:\.self){target in
                         let name=target==2 ? "iPhone" : (model.devices.first(where:{$0.id==model.selection[target]})?.name.components(separatedBy:" · ").first ?? "A\(target+1)")
@@ -83,14 +94,20 @@ struct DeepLinkSidebar:View {
                             .help(name).accessibilityIdentifier("deeplink.device.\(target)")
                     }
                 }.disabled(coordinator.running)
-                VStack(spacing:4){
+                if coordinator.input == .ready {
+                    TextField("drivee://…",text:$coordinator.readyLink,axis:.vertical)
+                        .textFieldStyle(.roundedBorder).font(.system(size:10,design:.monospaced)).lineLimit(2...4)
+                        .disabled(coordinator.running).accessibilityLabel("Готовый диплинк").accessibilityIdentifier("deeplink.ready")
+                }else{VStack(spacing:4){
                     ForEach(coordinator.presets){preset in
                         SidebarChoice(title:preset.name,selected:coordinator.selected==preset.id){coordinator.selected=preset.id}
                             .help(preset.name).accessibilityIdentifier("deeplink.preset.\(preset.id)")
                     }
                     if coordinator.presets.isEmpty{Text("Добавьте пресет в настройках").font(.caption).foregroundStyle(.secondary)}
-                }.disabled(coordinator.running)
-                Button{coordinator.open()}label:{Label(coordinator.running ? "Открываю…" : "Заполнить",systemImage:"link").frame(maxWidth:.infinity)}.disabled(coordinator.running || coordinator.presets.isEmpty).help("Открыть форму в клиентском аккаунте. Поддержка полей зависит от сборки Drivee").accessibilityIdentifier("deeplink.open")
+                }.disabled(coordinator.running)}
+                Button{coordinator.open()}label:{Label(coordinator.running ? "Открываю…" : coordinator.input == .ready ? "Открыть" : "Заполнить",systemImage:"link").frame(maxWidth:.infinity)}
+                    .disabled(coordinator.running || (coordinator.input == .ready ? coordinator.readyLink.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty : coordinator.presets.isEmpty))
+                    .help(coordinator.input == .ready ? "Открыть готовый диплинк без изменения параметров" : "Открыть форму в клиентском аккаунте. Поддержка полей зависит от сборки Drivee").accessibilityIdentifier("deeplink.open")
             }
             if coordinator.failed && !coordinator.message.isEmpty{Text(coordinator.message).font(.system(size:10)).foregroundStyle(coordinator.failed ? .orange : .secondary).fixedSize(horizontal:false,vertical:true).lineLimit(3).help(coordinator.message).accessibilityIdentifier("deeplink.status")}
         }.controlSize(.small).frame(maxWidth:.infinity,alignment:.leading)

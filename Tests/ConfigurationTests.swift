@@ -28,6 +28,13 @@ import Foundation
             for other in QAEnvironment.all where other.id != id {precondition(!QAEnvironment.matchesIOSPrimary(host,stand:other.id))}
         }
         precondition(!QAEnvironment.matchesIOSPrimary("https://indels.app",stand:"stage"))
+        for ready in ["drivee://open","drivee://open/driver/profile","drivee://web?url=https%3A%2F%2Fexample.com%2F","drivee://open/client/appcity?description=a+b%2Bc%20d&price=401&price=402#part"] {
+            let parsed=try ReadyDeepLink.url(" \n"+ready+"\n ")
+            precondition(parsed.absoluteString==ready) // Preserve encoding, duplicate fields, order and fragment.
+        }
+        for invalid in ["","https://example.com","drivee:/open","drivee://","drivee://open/a b","drivee://open?x=%XZ","drivee://open\n/client/appcity"] {
+            do{_=try ReadyDeepLink.url(invalid);preconditionFailure("Invalid ready link accepted")}catch is DeepLinkFailure{}
+        }
         let full=CourierPreset.defaults[0],minimal=CourierPreset.defaults[1]
         let defaultLink=try full.url()
         precondition(defaultLink.path == "/client/appcity_courier")

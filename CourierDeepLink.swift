@@ -6,6 +6,23 @@ enum ClientLinkMode:String,CaseIterable,Identifiable {
     var title:String{self == .courier ? "Курьер" : "Город"}
 }
 
+enum DeepLinkInput:String,CaseIterable,Identifiable {
+    case preset,ready
+    var id:String{rawValue}
+    var title:String{self == .preset ? "Пресет" : "Ссылка"}
+}
+
+enum ReadyDeepLink {
+    static func url(_ text:String)throws->URL {
+        let value=text.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !value.isEmpty else{throw DeepLinkFailure("Вставьте диплинк")}
+        guard let url=URL(string:value,encodingInvalidCharacters:false),url.scheme?.lowercased()=="drivee",let host=url.host,!host.isEmpty else{
+            throw DeepLinkFailure("Нужна корректная ссылка drivee://… без пробелов и переносов")
+        }
+        return url
+    }
+}
+
 struct CourierStop:Identifiable,Codable,Equatable {
     var id=UUID().uuidString
     var address:String
