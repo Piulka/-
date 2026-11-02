@@ -29,6 +29,13 @@ import Foundation
         }
         precondition(!QAEnvironment.matchesIOSPrimary("https://indels.app",stand:"stage"))
         let full=CourierPreset.defaults[0],minimal=CourierPreset.defaults[1]
+        let defaultLink=try full.url()
+        precondition(defaultLink.path == "/client/appcity_courier")
+        for ios in [false,true] {
+            let courier=URLComponents(url:try full.url(forIPhone:ios,mode:.courier),resolvingAgainstBaseURL:false)!
+            let city=URLComponents(url:try full.url(forIPhone:ios,mode:.city),resolvingAgainstBaseURL:false)!
+            precondition(city.path == "/client/appcity" && city.queryItems == courier.queryItems)
+        }
         let fullQuery=try items(full),minimalQuery=try items(minimal)
         precondition(fullQuery.count==9 && minimalQuery.count==2)
         precondition(fullQuery["door_to_door"]=="true" && fullQuery["recipient_phone"]?.hasPrefix("+")==true)

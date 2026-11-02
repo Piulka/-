@@ -488,22 +488,43 @@ struct IPhoneControls:View {
     }
 }
 
+struct SettingsSection<Content:View>:View {
+    let title:String
+    let id:String
+    let content:Content
+    @AppStorage private var expanded:Bool
+    init(title:String,id:String,@ViewBuilder content:()->Content){
+        self.title=title;self.id=id;self.content=content()
+        _expanded=AppStorage(wrappedValue:false,"settings.expanded."+id)
+    }
+    var body:some View {
+        VStack(alignment:.leading,spacing:expanded ? 14 : 0){
+            Button{withAnimation(.easeInOut(duration:0.16)){expanded.toggle()}}label:{
+                HStack{Text(title).font(.headline);Spacer();Image(systemName:expanded ? "chevron.up" : "chevron.down").font(.caption)}.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityIdentifier("settings."+id+".header")
+            // Keep editors alive so collapsing a section preserves its unsaved draft.
+            VStack(alignment:.leading,spacing:14){content}
+                .frame(height:expanded ? nil : 0,alignment:.top).clipped().opacity(expanded ? 1 : 0)
+                .allowsHitTesting(expanded).disabled(!expanded).accessibilityHidden(!expanded)
+        }.padding(16).frame(maxWidth:.infinity,alignment:.leading).background(Color.white.opacity(0.04),in:RoundedRectangle(cornerRadius:12))
+    }
+}
+
 struct SettingsView:View {
     @ObservedObject var model:DeskModel
     var body:some View {
         VStack(alignment:.leading,spacing:22){
             Text("Настройки").font(.title2.bold())
-            Toggle("Подключать доступные устройства автоматически",isOn:$model.autoConnect)
-            HStack{Text("Разрешение потока");Spacer();Picker("Разрешение",selection:$model.quality){Text("960 px").tag(960);Text("1280 px").tag(1280);Text("1600 px").tag(1600)}.labelsHidden().frame(width:140)}
-            HStack{Text("Частота кадров");Spacer();Picker("Частота",selection:$model.fps){Text("30 FPS").tag(30);Text("60 FPS").tag(60)}.labelsHidden().frame(width:140)}
-            Text("Параметры потока применяются при следующем подключении. Экраны подстраиваются под размер окна.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
-            Divider()
-            HStack{Text("ADB").font(.headline);Spacer();Button("Выбрать…"){model.chooseADB()}}
-            TextField("Путь к adb",text:$model.adbPath).textFieldStyle(.roundedBorder).font(.caption.monospaced())
-            Divider()
-            MediaSettings(media:model.media)
-            Divider()
-            DeepLinkSettings(coordinator:model.deepLinks)
+            SettingsSection(title:"Устройства и экран",id:"devices"){
+                Toggle("Подключать доступные устройства автоматически",isOn:$model.autoConnect)
+                HStack{Text("Разрешение потока");Spacer();Picker("Разрешение",selection:$model.quality){Text("960 px").tag(960);Text("1280 px").tag(1280);Text("1600 px").tag(1600)}.labelsHidden().frame(width:140)}
+                HStack{Text("Частота кадров");Spacer();Picker("Частота",selection:$model.fps){Text("30 FPS").tag(30);Text("60 FPS").tag(60)}.labelsHidden().frame(width:140)}
+                Text("Параметры потока применяются при следующем подключении. Экраны подстраиваются под размер окна.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                HStack{Text("ADB").font(.headline);Spacer();Button("Выбрать…"){model.chooseADB()}}
+                TextField("Путь к adb",text:$model.adbPath).textFieldStyle(.roundedBorder).font(.caption.monospaced())
+            }
+            SettingsSection(title:"Скриншоты и видео",id:"capture"){MediaSettings(media:model.media)}
+            SettingsSection(title:"Диплинки и пресеты",id:"deeplinks"){DeepLinkSettings(coordinator:model.deepLinks)}
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
     }
@@ -520,8 +541,10 @@ struct DeskView:View {
                 ScrollView{VStack(alignment:.leading,spacing:22){
                 VStack(alignment:.leading,spacing:10){
                 if let url=Bundle.main.url(forResource:"BrandMark",withExtension:"png"),let logo=NSImage(contentsOf:url){
-                    Image(nsImage:logo).resizable().interpolation(.high).scaledToFit().frame(width:52,height:52)
-                        .frame(maxWidth:.infinity,alignment:.leading).accessibilityLabel(toolName).accessibilityIdentifier("brand.logo").help(toolName)
+                    Button{tab = .devices}label:{
+                        Image(nsImage:logo).resizable().interpolation(.high).scaledToFit().frame(width:52,height:52)
+                            .frame(maxWidth:.infinity,alignment:.leading).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("Устройства").accessibilityIdentifier("brand.logo").help("Открыть устройства")
                 }
                 VStack(alignment:.leading,spacing:18){
                 Button{tab = .devices}label:{Label("Устройства",systemImage:"rectangle.split.2x1").font(.system(size:12,weight:.medium))}.buttonStyle(.plain).foregroundStyle(tab == .devices ? accent : Color.secondary).accessibilityIdentifier("navigation.devices")

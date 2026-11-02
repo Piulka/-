@@ -32,8 +32,8 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
 <key>CFBundleExecutable</key><string>DriveeQADesk</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.10.3</string>
-<key>CFBundleVersion</key><string>15</string>
+<key>CFBundleShortVersionString</key><string>0.10.4</string>
+<key>CFBundleVersion</key><string>16</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>

@@ -6,10 +6,12 @@ import SwiftUI
     @Published var presets:[CourierPreset] {didSet{if let data=try? JSONEncoder().encode(presets){UserDefaults.standard.set(data,forKey:"courierPresets")};if !presets.contains(where:{$0.id==selected}){selected=presets.first?.id ?? ""}}}
     @Published var selected="full"
     @Published var target=0
+    @Published var mode:ClientLinkMode {didSet{UserDefaults.standard.set(mode.rawValue,forKey:"clientLinkMode")}}
     @Published var running=false
     @Published var message=""
     @Published var failed=false
     init(){
+        mode=ClientLinkMode(rawValue:UserDefaults.standard.string(forKey:"clientLinkMode") ?? "") ?? .courier
         if let data=UserDefaults.standard.data(forKey:"courierPresets"),let saved=try? JSONDecoder().decode([CourierPreset].self,from:data){presets=saved}else{presets=CourierPreset.defaults}
         selected=presets.first?.id ?? ""
     }
@@ -26,7 +28,7 @@ import SwiftUI
         if destination<2,model.authorizations[destination].running || model.closingSlots.contains(destination){message="Дождитесь завершения действия на телефоне";failed=true;return}
         if destination==2,model.iosAuthorization.running{message="Дождитесь завершения входа iPhone";failed=true;return}
         do {
-            let url=try preset.url(forIPhone:destination==2)
+            let url=try preset.url(forIPhone:destination==2,mode:mode)
             let serial=destination<2 ? model.selection[destination] : ""
             guard destination==2 || !serial.isEmpty else{throw DeepLinkFailure("Выберите Android на вкладке устройств")}
             running=true;failed=false;message="Открываю форму…"
@@ -71,6 +73,9 @@ struct DeepLinkSidebar:View {
         VStack(alignment:.leading,spacing:8){
             Button{withAnimation(.easeInOut(duration:0.16)){expanded.toggle()}}label:{HStack{Text("ДИПЛИНКИ").font(.system(size:9,weight:.semibold));Spacer();Image(systemName:expanded ? "chevron.up" : "chevron.down").font(.system(size:9))}.foregroundStyle(.secondary).contentShape(Rectangle())}.buttonStyle(.plain).accessibilityIdentifier("deeplink.header")
             if expanded {
+                Picker("Форма",selection:$coordinator.mode){ForEach(ClientLinkMode.allCases){mode in Text(mode.title).tag(mode)}}
+                    .pickerStyle(.segmented).labelsHidden().disabled(coordinator.running).accessibilityIdentifier("deeplink.mode")
+                    .help("drivee://open/client/"+coordinator.mode.rawValue)
                 LazyVGrid(columns:Array(repeating:GridItem(.flexible(),spacing:4),count:3),spacing:4){
                     ForEach(0..<3,id:\.self){target in
                         let name=target==2 ? "iPhone" : (model.devices.first(where:{$0.id==model.selection[target]})?.name.components(separatedBy:" · ").first ?? "A\(target+1)")

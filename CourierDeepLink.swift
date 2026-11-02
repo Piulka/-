@@ -1,5 +1,11 @@
 import Foundation
 
+enum ClientLinkMode:String,CaseIterable,Identifiable {
+    case courier="appcity_courier",city="appcity"
+    var id:String{rawValue}
+    var title:String{self == .courier ? "Курьер" : "Город"}
+}
+
 struct CourierStop:Identifiable,Codable,Equatable {
     var id=UUID().uuidString
     var address:String
@@ -24,7 +30,7 @@ struct CourierPreset:Identifiable,Codable,Equatable {
         full.paymentType="1";full.comment="Test";full.entrance="2";full.recipientPhone="+79990000000";full.doorToDoor="true";full.senderAddress="2/3/15";full.recipientAddress="1/4/20"
         return [full,CourierPreset(id:"route-price",name:"Адреса + цена",stops:route,price:"350")]
     }
-    func url(forIPhone:Bool=false)throws->URL {
+    func url(forIPhone:Bool=false,mode:ClientLinkMode = .courier)throws->URL {
         func fail(_ text:String)throws->Never{throw DeepLinkFailure(text)}
         guard !name.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{try fail("Укажите название пресета")}
         guard (2...10).contains(stops.count) else{try fail("Нужно от 2 до 10 точек маршрута")}
@@ -47,7 +53,7 @@ struct CourierPreset:Identifiable,Codable,Equatable {
             for (key,value) in [("start_latitude",route[0]["latitude"]!),("start_longitude",route[0]["longitude"]!),("end_latitude",route[1]["latitude"]!),("end_longitude",route[1]["longitude"]!)]{query.append(URLQueryItem(name:key,value:String(describing:value)))}
         }
         for (key,value) in [("payment_type_id",paymentType),("description",comment),("entrance",entrance),("recipient_phone",recipientPhone),("door_to_door",doorToDoor),("sender_specifying_address",senderAddress),("recipient_specifying_address",recipientAddress)] where !value.isEmpty {query.append(URLQueryItem(name:key,value:value))}
-        var components=URLComponents(string:"drivee://open/client/appcity_courier")!
+        var components=URLComponents(string:"drivee://open/client/"+mode.rawValue)!
         components.queryItems=query
         components.percentEncodedQuery=components.percentEncodedQuery?.replacingOccurrences(of:"+",with:"%2B")
         guard let url=components.url else{try fail("Не удалось собрать диплинк")};return url
