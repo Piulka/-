@@ -41,12 +41,17 @@ def write_message(stream, value):
 
 
 def valid_task(value, now):
-    return (isinstance(value, dict) and
+    if not (isinstance(value, dict) and
             isinstance(value.get('id'), str) and re.fullmatch(r'[a-fA-F0-9-]{36}', value['id']) is not None and
-            value.get('stand') == '08' and value.get('operation') in ('ping', 'inspect', 'reset') and
-            isinstance(value.get('created'), (int, float)) and 0 <= now - value['created'] < 5 and
-            (value['operation'] == 'ping' or
-             isinstance(value.get('phone'), str) and re.fullmatch(r'258[0-9]{8}', value['phone']) is not None))
+            value.get('stand') == '08' and
+            type(value.get('created')) in (int, float) and 0 <= now - value['created'] < 5):
+        return False
+    operation = value.get('operation')
+    if operation in ('admin_read', 'admin_cache', 'admin_door'):
+        return (type(value.get('city')) is int and value['city'] == 590 and
+                (operation != 'admin_door' or value.get('value') in ('enabled', 'disabled') and value.get('expected') in ('enabled', 'disabled')))
+    return (operation == 'ping' or operation in ('inspect', 'reset') and
+            isinstance(value.get('phone'), str) and re.fullmatch(r'258[0-9]{8}', value['phone']) is not None)
 
 
 def safe_result(value):
@@ -57,6 +62,11 @@ def safe_result(value):
         n = value.get(key)
         if type(n) is int and 0 <= n <= 3:
             result[key] = n
+    if value.get('door') in ('enabled', 'disabled'):
+        result['door'] = value['door']
+    for key in ('saved', 'go', 'php'):
+        if type(value.get(key)) is bool:
+            result[key] = value[key]
     return result
 
 

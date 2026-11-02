@@ -45,13 +45,21 @@ class OTPBridgeTests(unittest.TestCase):
         result = host.safe_result({'ok': True, 'code': 'reset', 'found': 3, 'deleted': 3, 'phone': task['phone'], 'cookies': 'secret', 'remaining': 10})
         self.assertEqual(result, {'ok': True, 'code': 'reset', 'found': 3, 'deleted': 3})
 
+    def test_admin_scope_and_redaction(self):
+        now = time.time()
+        task = {'id': 'b' * 36, 'stand': '08', 'operation': 'admin_door', 'city': 590, 'value': 'enabled', 'expected': 'disabled', 'created': now}
+        self.assertTrue(host.valid_task(task, now))
+        for patch in [{'stand': '09'}, {'city': 591}, {'city': '590'}, {'value': 'any'}, {'expected': 'any'}, {'operation': 'admin_arbitrary'}, {'created': now - 10}]:
+            self.assertFalse(host.valid_task(dict(task, **patch), now))
+        self.assertEqual(host.safe_result({'ok': True, 'code': 'admin_saved', 'door': 'enabled', 'saved': True, 'go': True, 'php': False, 'csrf': 'private'}), {'ok': True, 'code': 'admin_saved', 'door': 'enabled', 'saved': True, 'go': True, 'php': False})
+
     def test_private_installer_and_extension_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             folder = installer.prepare(ROOT / 'ChromeOTPBridge', home)
             manifest = json.loads((folder / 'manifest.json').read_text())
             self.assertEqual(manifest['permissions'], ['scripting', 'nativeMessaging'])
-            self.assertEqual(manifest['host_permissions'], ['https://redis-insight.dev.indels.tech/*'])
+            self.assertEqual(manifest['host_permissions'], ['https://redis-insight.dev.indels.tech/*', 'https://test08-podval.int.indels.dev/*'])
             self.assertEqual(os.stat(folder.parent).st_mode & 0o777, 0o700)
             self.assertEqual(os.stat(folder.parent / 'native-host').st_mode & 0o777, 0o700)
             native = home / 'Library/Application Support/Google/Chrome/NativeMessagingHosts/local.zhmakee.otp.json'

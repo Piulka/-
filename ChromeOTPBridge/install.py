@@ -16,7 +16,7 @@ def prepare(source=None, home=None):
     os.chmod(root, 0o700)
     folder = root / 'extension'
     folder.mkdir(exist_ok=True, mode=0o700)
-    for name in ('manifest.json', 'worker.js', 'core.js'):
+    for name in ('manifest.json', 'worker.js', 'core.js', 'admin.js'):
         shutil.copyfile(source / name, folder / name)
         os.chmod(folder / name, 0o600)
     shutil.copyfile(source / 'native_host.py', root / 'native_host.py')

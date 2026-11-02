@@ -558,7 +558,7 @@ struct SettingsView:View {
 
 struct DeskView:View {
     @ObservedObject var model:DeskModel
-    private enum Tab {case devices,builds,settings,accounts,annotation}
+    private enum Tab {case devices,builds,settings,accounts,admin,annotation}
     @State private var tab:Tab = .devices
     @ObservedObject var media:MediaCoordinator
     var body:some View {
@@ -577,6 +577,7 @@ struct DeskView:View {
                 Button{tab = .builds}label:{Label("Сборки",systemImage:"shippingbox").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .builds ? accent : Color.secondary).accessibilityIdentifier("navigation.builds")
                 Button{tab = .settings}label:{Label("Настройки",systemImage:"slider.horizontal.3").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .settings ? accent : Color.secondary).accessibilityIdentifier("navigation.settings")
                 Button{tab = .accounts}label:{Label("Аккаунты",systemImage:"person.crop.circle").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .accounts ? accent : Color.secondary).accessibilityIdentifier("navigation.accounts")
+                Button{tab = .admin}label:{Label("Админка",systemImage:"switch.2").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .admin ? accent : Color.secondary).accessibilityIdentifier("navigation.admin")
                 }
                 }
                 RepeatSidebar(model:model,sync:model.androidRepeat)
@@ -603,6 +604,8 @@ struct DeskView:View {
                 .opacity(tab == .accounts ? 1 : 0).allowsHitTesting(tab == .accounts).disabled(tab != .accounts).accessibilityHidden(tab != .accounts)
             ScrollView{SettingsView(model:model).frame(maxWidth:600)}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
                 .opacity(tab == .settings ? 1 : 0).allowsHitTesting(tab == .settings).disabled(tab != .settings).accessibilityHidden(tab != .settings)
+            ScrollView{AdminView(bridge:model.otp)}.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+                .opacity(tab == .admin ? 1 : 0).allowsHitTesting(tab == .admin).disabled(tab != .admin).accessibilityHidden(tab != .admin)
             BuildsView(model:model,library:model.builds,active:tab == .builds).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
                 .opacity(tab == .builds ? 1 : 0).allowsHitTesting(tab == .builds).disabled(tab != .builds).accessibilityHidden(tab != .builds)
             if let editor=media.editor{ScreenshotEditor(document:editor,media:media).opacity(tab == .annotation ? 1 : 0).allowsHitTesting(tab == .annotation).disabled(tab != .annotation).accessibilityHidden(tab != .annotation)}
@@ -612,7 +615,7 @@ struct DeskView:View {
                 await model.refresh()
                 while !Task.isCancelled{do{try await Task.sleep(nanoseconds:3_000_000_000)}catch{break};await model.poll()}
             }
-            .onChange(of:tab){_,_ in NSApp.keyWindow?.makeFirstResponder(nil)}
+            .onChange(of:tab){_,value in NSApp.keyWindow?.makeFirstResponder(nil);if value == .admin && !model.otp.working{model.otp.readAdmin()}}
             .onChange(of:media.editor == nil){_,empty in if empty && tab == .annotation{tab = .devices}}
             .onDisappear{model.stopAll()}
     }

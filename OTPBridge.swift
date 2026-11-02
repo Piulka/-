@@ -6,6 +6,10 @@ import SwiftUI
     @Published private(set) var connected=false
     @Published private(set) var message=""
     @Published private(set) var failed=false
+    @Published private(set) var adminDoor:String?
+    @Published private(set) var adminMessage=""
+    @Published private(set) var adminFailed=false
+    @Published private(set) var adminRevision=0
     private(set) var accountID=""
     private var monitoring:Task<Void,Never>?
     private var operation:Task<Void,Never>?
@@ -43,12 +47,25 @@ import SwiftUI
     func check(){perform(action:"ping",phone:nil,id:"")}
     func inspect(phone:String,id:String){perform(action:"inspect",phone:phone,id:id)}
     func reset(phone:String,id:String){perform(action:"reset",phone:phone,id:id)}
-    private func perform(action:String,phone:String?,id:String){
+    func readAdmin(){perform(action:"admin_read",phone:nil,id:"")}
+    func saveDoor(_ value:String,expected:String){perform(action:"admin_door",phone:nil,id:"",value:value,expected:expected)}
+    func clearAdminCache(){perform(action:"admin_cache",phone:nil,id:"")}
+    func showAdmin(){
+        guard let chrome=NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.google.Chrome"),let url=URL(string:AdminRules.url) else{return}
+        NSWorkspace.shared.open([url],withApplicationAt:chrome,configuration:NSWorkspace.OpenConfiguration())
+    }
+    private func perform(action:String,phone:String?,id:String,value:String?=nil,expected:String?=nil){
         guard !working else{return}
+        let admin=["admin_read","admin_door","admin_cache"].contains(action)
+        func report(_ text:String,error:Bool=false){
+            if admin{adminMessage=text;adminFailed=error}else{message=text;failed=error}
+        }
         updateConnection()
-        guard connected else{failed=true;message="Подключите расширение Chrome в настройках OTP";return}
-        guard action == "ping" || phone.map({OTPRules.valid(phone:$0,stand:"08")}) == true else{failed=true;message=OTPRules.message("invalid_phone");return}
-        working=true;accountID=id;failed=false;message=action == "reset" ? "Сбрасываю OTP test08…" : "Проверяю RedisInsight…"
+        guard connected else{report("Подключите расширение Chrome в настройках OTP",error:true);return}
+        guard admin || action == "ping" || phone.map({OTPRules.valid(phone:$0,stand:"08")}) == true else{failed=true;message=OTPRules.message("invalid_phone");return}
+        if action == "admin_door",!(AdminRules.states.contains(value ?? "") && AdminRules.states.contains(expected ?? "")){report(AdminRules.message("invalid_request"),error:true);return}
+        working=true;accountID=id
+        report(admin ? (action == "admin_read" ? "Загружаю настройки…" : action == "admin_cache" ? "Сбрасываю GO + PHP…" : "Сохраняю Door to Door и сбрасываю кэш…") : action == "reset" ? "Сбрасываю OTP test08…" : "Проверяю RedisInsight…")
         operation=Task{[self] in
             defer{working=false;operation=nil}
             let queue=root.appendingPathComponent("queue",isDirectory:true),requestID=UUID().uuidString
@@ -62,6 +79,9 @@ import SwiftUI
                 }
                 var task:[String:Any]=["id":requestID,"stand":"08","operation":action,"created":Date().timeIntervalSince1970]
                 if let phone{task["phone"]=phone}
+                if admin{task["city"]=590}
+                if let value{task["value"]=value}
+                if let expected{task["expected"]=expected}
                 let data=try JSONSerialization.data(withJSONObject:task)
                 // umask cannot be assumed for a GUI process. Use a protected temporary file then rename.
                 let temporary=queue.appendingPathComponent("\(requestID).tmp")
@@ -70,15 +90,25 @@ import SwiftUI
                 let until=Date().addingTimeInterval(36)
                 repeat {
                     if let bytes=try? Data(contentsOf:response),bytes.count<16384,let result=try JSONSerialization.jsonObject(with:bytes) as? [String:Any]{
-                        guard result["ok"] as? Bool == true else{throw AuthFailure(OTPRules.message(result["code"] as? String ?? "connection_error"))}
-                        guard let success=OTPRules.successMessage(result,action:action) else{throw AuthFailure(OTPRules.message(action == "reset" ? "reset_unverified" : "unexpected_response"))}
-                        message=success
+                        if admin{
+                            guard result["ok"] as? Bool == true else{throw AuthFailure(AdminRules.message(result["code"] as? String ?? "admin_connection_error",saved:result["saved"] as? Bool == true,go:result["go"] as? Bool == true,php:result["php"] as? Bool == true))}
+                            guard let success=AdminRules.success(result,action:action,value:value) else{throw AuthFailure(AdminRules.message("admin_unverified"))}
+                            if let door=result["door"] as? String{adminDoor=door;adminRevision+=1}
+                            report(success)
+                        }else{
+                            guard result["ok"] as? Bool == true else{throw AuthFailure(OTPRules.message(result["code"] as? String ?? "connection_error"))}
+                            guard let success=OTPRules.successMessage(result,action:action) else{throw AuthFailure(OTPRules.message(action == "reset" ? "reset_unverified" : "unexpected_response"))}
+                            report(success)
+                        }
                         return
                     }
                     try await Task.sleep(nanoseconds:150_000_000)
                 }while Date()<until
-                throw AuthFailure(OTPRules.message("timeout"))
-            }catch{failed=true;message=(error as? AuthFailure)?.message ?? "Не удалось связаться с Chrome"}
+                throw AuthFailure(admin ? AdminRules.message("timeout") : OTPRules.message("timeout"))
+            }catch{
+                if admin && action != "admin_cache"{adminDoor=nil}
+                report((error as? AuthFailure)?.message ?? "Не удалось связаться с Chrome",error:true)
+            }
         }
     }
     func finishBeforeQuit()async{while working{try? await Task.sleep(nanoseconds:100_000_000)}}
@@ -91,7 +121,7 @@ struct OTPBridgeSettings:View {
     var body:some View {
         VStack(alignment:.leading,spacing:12){
             Label(bridge.connected ? "Расширение Chrome подключено" : "Расширение Chrome не подключено",systemImage:bridge.connected ? "checkmark.circle" : "link")
-            Text("Работает только с test08 через открытую вкладку RedisInsight. Внутренняя учётка остаётся в Chrome.").font(.caption).foregroundStyle(.secondary)
+            Text("Мост test08: RedisInsight для OTP и админка Калуги. Учётные данные остаются в Chrome.").font(.caption).foregroundStyle(.secondary)
             HStack{Button("Подготовить расширение"){bridge.prepare()}.accessibilityIdentifier("otp.prepare");Button("Показать папку"){bridge.showFolder()}.accessibilityIdentifier("otp.folder")}.disabled(bridge.working)
             Text("В Chrome откройте chrome://extensions, включите «Режим разработчика» и выберите «Загрузить распакованное» → папка extension.").font(.caption).foregroundStyle(.secondary)
             HStack{Button("Открыть RedisInsight"){bridge.showRedis()};Button("Проверить подключение"){bridge.check()}.disabled(bridge.working).accessibilityIdentifier("otp.check")}

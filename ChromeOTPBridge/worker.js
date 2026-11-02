@@ -5,13 +5,15 @@ async function execute(task) {
   if (active) return { ok: false, code: 'busy' };
   active = true;
   try {
-    const tabs = await chrome.tabs.query({ url: targetURL + '*' });
-    const tab = tabs.find(t => t.url === targetURL && !t.incognito);
-    if (!tab) return { ok: false, code: 'tab_missing' };
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['core.js'] });
+    const admin = ['admin_read', 'admin_door', 'admin_cache'].includes(task.operation);
+    const url = admin ? 'https://test08-podval.int.indels.dev/podval/city/update?id=590' : targetURL;
+    const tabs = await chrome.tabs.query({ url: url + '*' });
+    const tab = tabs.find(t => t.url?.split('#')[0] === url && !t.incognito);
+    if (!tab) return { ok: false, code: admin ? 'admin_tab_missing' : 'tab_missing' };
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [admin ? 'admin.js' : 'core.js'] });
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: request => globalThis.ZhmakeeOTP.run(request),
+      func: request => request.operation.startsWith('admin_') ? globalThis.ZhmakeeAdmin.run(request) : globalThis.ZhmakeeOTP.run(request),
       args: [task],
     });
     return results[0]?.result || { ok: false, code: 'connection_error' };
