@@ -52,9 +52,7 @@ enum LocalProcess {
     let deepLinks=DeepLinkCoordinator()
     let builds=BuildLibrary()
     let androidRepeat=AndroidRepeat()
-    let mirrorDock=MirrorDock()
     private var repeatObservation:AnyCancellable?
-    private var mirrorObservation:AnyCancellable?
     private var connectionObservation:AnyCancellable?
     @Published var installingDevices:Set<String>=[]
     func isInstalling(_ slot:Int)->Bool{installingDevices.contains(selection[slot])}
@@ -79,7 +77,6 @@ enum LocalProcess {
         builds.model=self
         androidRepeat.model=self
         repeatObservation=androidRepeat.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
-        mirrorObservation=mirrorDock.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
         connectionObservation=Publishers.MergeMany(sessions.map{$0.$connected.removeDuplicates().map{_ in ()}.eraseToAnyPublisher()}).sink{[weak self] _ in
             Task{@MainActor in
                 guard let self else{return};self.objectWillChange.send()
@@ -130,7 +127,6 @@ enum LocalProcess {
         if state != Set(devices.map{$0.id+":"+$0.state}) { await refresh() }
     }
     func stopAll() {
-        mirrorDock.disable()
         Task{await androidRepeat.stop()}
         for i in 0..<2 { tasks[i]?.cancel();sessions[i].stop();authorizations[i].cancel() };iosAuthorization.cancel()
     }
@@ -478,9 +474,6 @@ struct IPhoneControls:View {
                         else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
                     }
                     Button("Видеоповтор ↗"){model.showMirror()}
-                    Toggle("Связать окна",isOn:Binding(get:{model.mirrorDock.enabled},set:{model.mirrorDock.setEnabled($0)})).font(.system(size:10)).toggleStyle(.switch).controlSize(.mini).disabled(auth.running).accessibilityIdentifier("mirror.dock")
-                        .help("Отдельное окно Apple располагается справа, следует за пультом и сворачивается вместе с ним. Это не встраивание экрана.")
-                    if !model.mirrorDock.message.isEmpty{Text(model.mirrorDock.message).font(.system(size:9)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
                 }.controlSize(.small).padding(.bottom,10)
             }
             if !auth.message.isEmpty{
@@ -511,8 +504,6 @@ struct SettingsView:View {
             MediaSettings(media:model.media)
             Divider()
             DeepLinkSettings(coordinator:model.deepLinks)
-            Divider()
-            Label("iPhone → «Связать окна»: отдельный видеоповтор справа, совместное перемещение и сворачивание. Экран Apple не встроен в пульт.",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
     }
@@ -539,8 +530,8 @@ struct DeskView:View {
                 Button{tab = .accounts}label:{Label("Аккаунты",systemImage:"person.crop.circle").font(.system(size:12))}.buttonStyle(.plain).foregroundStyle(tab == .accounts ? accent : Color.secondary).accessibilityIdentifier("navigation.accounts")
                 }
                 }
-                DeepLinkSidebar(model:model,coordinator:model.deepLinks)
                 RepeatSidebar(model:model,sync:model.androidRepeat)
+                DeepLinkSidebar(model:model,coordinator:model.deepLinks)
                 MediaSidebar(model:model,media:media){tab = .annotation}
                 }.frame(maxWidth:.infinity,alignment:.leading)}.scrollIndicators(.hidden)
                 Spacer(minLength:4)
@@ -587,6 +578,6 @@ struct DeskView:View {
         return CGSize(width:max(760,min(1100,screen.width-360)),height:max(620,min(940,screen.height-36)))
     }
     var body:some Scene {
-        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;delegate.androidRepeat=model.androidRepeat;delegate.mirrorDock=model.mirrorDock;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
+        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;delegate.androidRepeat=model.androidRepeat;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
     }
 }

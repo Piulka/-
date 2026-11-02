@@ -15,6 +15,19 @@ import Foundation
             for other in QAEnvironment.all where other != environment {precondition(!QAEnvironment.matches(other.host,stand:environment.id))}
         }
         precondition(!QAEnvironment.matches("test010-fridi.int.indels.dev",stand:"01"))
+        precondition(QAEnvironment.matchesIOSPrimary("Current Host: https://int.indels.dev",stand:"stage"))
+        precondition(QAEnvironment.matchesIOSPrimary("https://fridi.int.indels.dev/",stand:"stage"))
+        precondition(!QAEnvironment.matchesIOSPrimary("https://test08-djem.int.indels.dev",stand:"stage"))
+        precondition(!QAEnvironment.matchesIOSPrimary("https://test08-fridi.int.indels.dev",stand:"stage"))
+        for number in 1...10 {
+            let id=String(format:"%02d",number),host="test\(id)-djem.int.indels.dev"
+            precondition(QAEnvironment.matchesIOSPrimary("https://\(host)",stand:id))
+            precondition(!QAEnvironment.matches("https://\(host)",stand:id))
+            precondition(!QAEnvironment.matchesIOSPrimary("https://evil-\(host)",stand:id))
+            precondition(!QAEnvironment.matchesIOSPrimary("https://test\(id)0-djem.int.indels.dev",stand:id))
+            for other in QAEnvironment.all where other.id != id {precondition(!QAEnvironment.matchesIOSPrimary(host,stand:other.id))}
+        }
+        precondition(!QAEnvironment.matchesIOSPrimary("https://indels.app",stand:"stage"))
         let full=CourierPreset.defaults[0],minimal=CourierPreset.defaults[1]
         let fullQuery=try items(full),minimalQuery=try items(minimal)
         precondition(fullQuery.count==9 && minimalQuery.count==2)

@@ -38,7 +38,7 @@ import SwiftUI
                         let result=await LocalProcess.run(adb,["-s",serial,"shell",AndroidShell.deepLinkCommand(url)],timeout:12)
                         guard result.0==0,result.1.contains("Status: ok"),!result.1.contains("Error:"),!result.1.contains("Exception") else{throw DeepLinkFailure("Диплинк не открылся. Проверьте подключение и сборку Drivee")}
                     }else{try await openIPhone(url)}
-                    message="Ссылка отправлена · \(preset.name)"
+                    message=""
                 }catch{message=error.localizedDescription;failed=true}
             }
         }catch{message=error.localizedDescription;failed=true}
@@ -87,7 +87,7 @@ struct DeepLinkSidebar:View {
                 }.disabled(coordinator.running)
                 Button{coordinator.open()}label:{Label(coordinator.running ? "Открываю…" : "Заполнить",systemImage:"link").frame(maxWidth:.infinity)}.disabled(coordinator.running || coordinator.presets.isEmpty).help("Открыть форму в клиентском аккаунте. Поддержка полей зависит от сборки Drivee").accessibilityIdentifier("deeplink.open")
             }
-            if !coordinator.message.isEmpty{Text(coordinator.message).font(.system(size:10)).foregroundStyle(coordinator.failed ? .orange : .secondary).fixedSize(horizontal:false,vertical:true).lineLimit(3).help(coordinator.message).accessibilityIdentifier("deeplink.status")}
+            if coordinator.failed && !coordinator.message.isEmpty{Text(coordinator.message).font(.system(size:10)).foregroundStyle(coordinator.failed ? .orange : .secondary).fixedSize(horizontal:false,vertical:true).lineLimit(3).help(coordinator.message).accessibilityIdentifier("deeplink.status")}
         }.controlSize(.small).frame(maxWidth:.infinity,alignment:.leading)
     }
 }
