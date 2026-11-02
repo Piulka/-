@@ -1,8 +1,13 @@
 package local.drivee.qahelper;
 
 import android.app.*;
+import android.content.Context;
+import android.graphics.Point;
+import android.graphics.Rect;
+import android.hardware.display.DisplayManager;
 import android.os.*;
 import android.net.*;
+import android.view.*;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.view.accessibility.*;
 import org.json.*;
@@ -13,10 +18,12 @@ import java.util.*;
 
 /** Session-only UiAutomation connection; no persistent accessibility service or event log. */
 public class SyncInstrumentation extends Instrumentation {
+    private static final class TapFailure extends IOException{final String code;TapFailure(String code){this.code=code;}}
     private UiAutomation ui;
     private BufferedWriter writer;
     private final Object outputLock=new Object();
     private final List<Echo> echoes=new ArrayList<>();
+    private final List<long[]> managedTaps=new ArrayList<>();
     private volatile boolean live=false;
     private static final class Echo {
         AccessibilityNodeInfo node;String action,value;long until;
@@ -46,6 +53,10 @@ public class SyncInstrumentation extends Instrumentation {
         int type=e.getEventType();
         String action=type==AccessibilityEvent.TYPE_VIEW_CLICKED?"click":type==AccessibilityEvent.TYPE_VIEW_LONG_CLICKED?"long":type==AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED?"text":"";
         if(action.isEmpty())return;
+        if(!action.equals("text"))synchronized(managedTaps){
+            long now=SystemClock.uptimeMillis();managedTaps.removeIf(range->range[1]<now-2000);
+            for(long[] range:managedTaps)if(e.getEventTime()>=range[0] && e.getEventTime()<=range[1])return;
+        }
         AccessibilityNodeInfo n=e.getSource();if(n==null)return;
         try {
             if(n.isPassword())return;
@@ -65,7 +76,7 @@ public class SyncInstrumentation extends Instrumentation {
     }
     private boolean apply(JSONObject command)throws Exception {
         String action=command.optString("action");
-        if(!Arrays.asList("click","long","text").contains(action))return false;
+        if(!Arrays.asList("click","long","text","dismissDrawer").contains(action))return false;
         ElementMatch.Key wanted=key(command.getJSONObject("element"));
         AccessibilityNodeInfo root=ui.getRootInActiveWindow();if(root==null)return false;
         List<AccessibilityNodeInfo> nodes=new ArrayList<>();List<ElementMatch.Key> keys=new ArrayList<>();
@@ -81,6 +92,17 @@ public class SyncInstrumentation extends Instrumentation {
             int index=ElementMatch.unique(wanted,keys);if(index<0)return false;
             AccessibilityNodeInfo n=nodes.get(index);
             if(!n.isVisibleToUser() || !n.isEnabled() || n.isPassword())return false;
+            if(action.equals("dismissDrawer")){
+                Point screen=displaySize();if(!isOpenDrawer(n,screen))return false;
+                Rect drawer=new Rect();n.getBoundsInScreen(drawer);
+                // Dismiss through this device's scrim. Legacy Back injection can be
+                // accepted by Android while the app's predictive-back drawer stays open.
+                int left=Math.max(0,drawer.left),right=Math.max(0,screen.x-drawer.right);
+                if(Math.max(left,right)<8)return false;
+                int x=right>=left?drawer.right+right/2:left/2;
+                int y=Math.max(0,Math.min(screen.y-1,drawer.centerY()));
+                return injectTap(x,y,40);
+            }
             Bundle args=new Bundle();int op;
             String value=command.optString("value");
             if(action.equals("text")) {
@@ -95,9 +117,69 @@ public class SyncInstrumentation extends Instrumentation {
             }
             Echo echo=new Echo(n,action,value);synchronized(echoes){if(echoes.size()>128){for(Echo x:echoes)x.node.recycle();echoes.clear();}echoes.add(echo);}
             boolean ok=n.performAction(op,args);
+            // Some custom controls handle touch but reject ACTION_CLICK. Resolve the target's
+            // own element bounds; never copy the source device's coordinates.
+            if(!ok && !action.equals("text")){Rect bounds=new Rect();n.getBoundsInScreen(bounds);ok=!bounds.isEmpty() && injectTap(bounds.centerX(),bounds.centerY(),action.equals("long")?600:40);}
             if(!ok)synchronized(echoes){if(echoes.remove(echo))echo.node.recycle();}
             return ok;
         }finally{for(AccessibilityNodeInfo n:nodes)n.recycle();while(!queue.isEmpty())queue.remove().recycle();}
+    }
+    private Point displaySize(){
+        Point size=new Point();DisplayManager manager=(DisplayManager)getTargetContext().getSystemService(Context.DISPLAY_SERVICE);
+        manager.getDisplay(Display.DEFAULT_DISPLAY).getRealSize(size);return size;
+    }
+    private static boolean isOpenDrawer(AccessibilityNodeInfo n,Point screen){
+        if(!str(n.getViewIdResourceName()).endsWith("/main_fragmentcontainerview_navigation") || !n.isVisibleToUser())return false;
+        Rect b=new Rect();n.getBoundsInScreen(b);return b.width()>0 && b.width()<screen.x*0.98 && b.height()>screen.y*0.5;
+    }
+    private boolean injectTap(int x,int y,int duration)throws InterruptedException {
+        long began=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(began,began,MotionEvent.ACTION_DOWN,x,y,0);
+        down.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+        boolean ok;
+        try{ok=ui.injectInputEvent(down,true);}finally{down.recycle();}
+        try{Thread.sleep(duration);}finally{
+            MotionEvent up=MotionEvent.obtain(began,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0);
+            up.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            try{ok=ui.injectInputEvent(up,true) && ok;}finally{up.recycle();}
+        }
+        return ok;
+    }
+    private JSONObject sourceTap(JSONObject command)throws Exception {
+        double nx=command.optDouble("x",-1),ny=command.optDouble("y",-1);
+        if(!Double.isFinite(nx) || !Double.isFinite(ny) || nx<0 || nx>1 || ny<0 || ny>1)throw new TapFailure("coordinates");
+        Point screen=displaySize();int x=Math.min(screen.x-1,(int)(nx*screen.x)),y=Math.min(screen.y-1,(int)(ny*screen.y));
+        int duration=command.optDouble("duration",0)>=0.45?600:40;
+        boolean keyboard=false;
+        List<AccessibilityWindowInfo> windows=ui.getWindows();
+        for(AccessibilityWindowInfo window:windows){Rect b=new Rect();window.getBoundsInScreen(b);if(window.getType()==AccessibilityWindowInfo.TYPE_INPUT_METHOD && b.contains(x,y))keyboard=true;window.recycle();}
+        JSONObject relay=null;
+        if(!keyboard){
+            AccessibilityNodeInfo root=ui.getRootInActiveWindow();if(root==null)throw new TapFailure("root_unavailable");
+            List<AccessibilityNodeInfo> nodes=new ArrayList<>();
+            AccessibilityNodeInfo drawer=null;
+            try{
+                TapTree.Node snapshot=captureTree(root,nodes,duration>40,0);
+                for(AccessibilityNodeInfo n:nodes){Rect b=new Rect();n.getBoundsInScreen(b);if(isOpenDrawer(n,screen) && !b.contains(x,y))drawer=n;}
+                if(drawer!=null)relay=new JSONObject().put("action","dismissDrawer").put("element",json(key(drawer)));
+                else{
+                    int index=TapTree.hit(snapshot,x,y);if(index<0)throw new TapFailure("no_hit");
+                    AccessibilityNodeInfo hit=nodes.get(index);
+                    relay=new JSONObject().put("action",duration>40?"long":"click").put("element",json(key(hit))).put("value","");
+                }
+            }finally{for(AccessibilityNodeInfo n:nodes)n.recycle();}
+        }
+        long now=SystemClock.uptimeMillis();synchronized(managedTaps){managedTaps.removeIf(range->range[1]<now-2000);managedTaps.add(new long[]{now,now+duration+500});}
+        if(!injectTap(x,y,duration))throw new TapFailure("input_rejected");
+        return new JSONObject().put("ok",true).put("relay",relay==null?JSONObject.NULL:relay);
+    }
+    private TapTree.Node captureTree(AccessibilityNodeInfo n,List<AccessibilityNodeInfo> nodes,boolean longPress,int depth)throws IOException {
+        int index=nodes.size();nodes.add(n);Rect b=new Rect();n.getBoundsInScreen(b);
+        TapTree.Node result=new TapTree.Node(index,b.left,b.top,b.right,b.bottom,n.getDrawingOrder(),n.isVisibleToUser(),n.isEnabled() && !n.isPassword() && (n.isClickable() || n.isEditable() || (longPress && n.isLongClickable())));
+        if(depth<80 && nodes.size()<3000)for(int i=0;i<n.getChildCount();i++){
+            AccessibilityNodeInfo child=n.getChild(i);if(child!=null)result.children.add(captureTree(child,nodes,longPress,depth+1));
+            if(nodes.size()>=3000)break;
+        }
+        return result;
     }
     @Override public void onStart(){
         LocalServerSocket server=null;LocalSocket client=null;
@@ -116,7 +198,16 @@ public class SyncInstrumentation extends Instrumentation {
             if(auth==null || !MessageDigest.isEqual(auth.getBytes(StandardCharsets.UTF_8),token.getBytes(StandardCharsets.UTF_8)))throw new IOException();
             writer=new BufferedWriter(new OutputStreamWriter(client.getOutputStream(),StandardCharsets.UTF_8));
             live=true;client.setSoTimeout(0);send(new JSONObject().put("ready",true));
-            String line;while(live && (line=readLine(reader,262144))!=null){JSONObject c=new JSONObject(line);boolean ok=apply(c);send(new JSONObject().put("ack",c.optString("request")).put("ok",ok));}
+            String line;while(live && (line=readLine(reader,262144))!=null){
+                JSONObject c=new JSONObject(line),reply;
+                try{reply=c.optString("action").equals("sourceTap")?sourceTap(c):new JSONObject().put("ok",apply(c));}
+                catch(Exception error){
+                    String reason=error instanceof TapFailure?((TapFailure)error).code:error.getClass().getSimpleName();
+                    android.util.Log.w("ZhmakeeSync",reason); // Error category only: never field values or selectors.
+                    reply=new JSONObject().put("ok",false).put("reason",reason);
+                }
+                send(reply.put("ack",c.optString("request")));
+            }
         }catch(Exception ignored){}finally{
             live=false;if(ui!=null)ui.setOnAccessibilityEventListener(null);
             synchronized(echoes){for(Echo x:echoes)x.node.recycle();echoes.clear();}

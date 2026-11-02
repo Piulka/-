@@ -13,15 +13,24 @@ private enum RepeatFailure:Error {case connection,unmatched}
     private var worker:Process?
     private var tunnel:(String,String,Int)?
     private var incoming=Data()
-    private var waiting:[String:CheckedContinuation<Bool,Error>]=[:]
+    private var waiting:[String:CheckedContinuation<[String:Any],Error>]=[:]
     private var ready=false,closed=false
     func start(adb:String,serial:String)async throws {
         guard let apk=Bundle.main.url(forResource:"qa-helper",withExtension:"apk") else{throw RepeatFailure.connection}
         let hash=SHA256.hash(data:try Data(contentsOf:apk)).map{String(format:"%02x",$0)}.joined()
         let present=await LocalProcess.run(adb,["-s",serial,"shell","pm","path","local.drivee.qahelper"])
         try check()
+        // An installer can finish after its ADB client times out. Verify the actual APK before
+        // asking Huawei to install the same component again.
+        if UserDefaults.standard.string(forKey:"helperHash."+serial) != hash,
+           let installed=present.1.split(separator:"\n").first(where:{$0.hasPrefix("package:")})?.dropFirst(8),
+           installed.range(of:"^/data/app/[A-Za-z0-9_./+=~-]+/base\\.apk$",options:.regularExpression) != nil {
+            let digest=await LocalProcess.run(adb,["-s",serial,"exec-out","sha256sum",String(installed)],timeout:4)
+            try check()
+            if digest.0==0,digest.1.split(whereSeparator:{$0.isWhitespace}).first.map(String.init)==hash{UserDefaults.standard.set(hash,forKey:"helperHash."+serial)}
+        }
         if present.0 != 0 || !present.1.contains("package:") || UserDefaults.standard.string(forKey:"helperHash."+serial) != hash {
-            let installed=await LocalProcess.run(adb,["-s",serial,"install","--no-incremental","-r","-t",apk.path],timeout:45)
+            let installed=await LocalProcess.run(adb,["-s",serial,"install","--no-incremental","-r","-t",apk.path],timeout:90)
             try check()
             guard installed.0==0,installed.1.contains("Success") else{throw AuthFailure("Разрешите обновление QA-компонента на Android")}
             UserDefaults.standard.set(hash,forKey:"helperHash."+serial)
@@ -75,19 +84,19 @@ private enum RepeatFailure:Error {case connection,unmatched}
                     let line=self.incoming[..<end];self.incoming.removeSubrange(...end)
                     guard let packet=try? JSONSerialization.jsonObject(with:Data(line)) as? [String:Any] else{self.onFailure?();return}
                     if packet["ready"] as? Bool == true{self.ready=true}
-                    else if let request=packet["ack"] as? String{self.waiting.removeValue(forKey:request)?.resume(returning:packet["ok"] as? Bool == true)}
+                    else if let request=packet["ack"] as? String{self.waiting.removeValue(forKey:request)?.resume(returning:packet)}
                     else if packet["event"] as? Bool == true{self.onEvent?(packet)}
                 }
                 if complete || error != nil{if self.ready{self.onFailure?()}}else{self.receive(channel)}
             }
         }
     }
-    func apply(_ event:[String:Any])async throws {
+    private func request(_ event:[String:Any])async throws->[String:Any] {
         guard ready,!closed,let channel=socket else{throw RepeatFailure.connection}
         var command=event;command.removeValue(forKey:"event")
         let id=UUID().uuidString;command["request"]=id
         var data=try JSONSerialization.data(withJSONObject:command);data.append(10)
-        let ok=try await withCheckedThrowingContinuation{(continuation:CheckedContinuation<Bool,Error>) in
+        let result=try await withCheckedThrowingContinuation{(continuation:CheckedContinuation<[String:Any],Error>) in
             waiting[id]=continuation
             channel.send(content:data,completion:.contentProcessed{[weak self] error in
                 if error != nil{Task{@MainActor in self?.waiting.removeValue(forKey:id)?.resume(throwing:RepeatFailure.connection)}}
@@ -97,13 +106,16 @@ private enum RepeatFailure:Error {case connection,unmatched}
                 self?.waiting.removeValue(forKey:id)?.resume(throwing:RepeatFailure.connection)
             }
         }
-        guard ok else{throw RepeatFailure.unmatched}
+        guard result["ok"] as? Bool == true else{throw RepeatFailure.unmatched}
+        return result
     }
+    func apply(_ event:[String:Any])async throws{_=try await request(event)}
+    func sourceTap(_ event:[String:Any])async throws->[String:Any]?{try await request(event)["relay"] as? [String:Any]}
     func stop()async {
         closed=true;onEvent=nil;onFailure=nil;socket?.stateUpdateHandler=nil;socket?.cancel();socket=nil
         for continuation in waiting.values{continuation.resume(throwing:CancellationError())};waiting.removeAll()
         if let worker {
-            for _ in 0..<10{if !worker.isRunning{break};try? await Task.sleep(nanoseconds:50_000_000)}
+            for _ in 0..<20{if !worker.isRunning{break};await Task.detached{try? await Task.sleep(nanoseconds:50_000_000)}.value}
             if worker.isRunning,let (adb,serial,_)=tunnel{_=await LocalProcess.run(adb,["-s",serial,"shell","am","force-stop","local.drivee.qahelper"],timeout:3)}
             if worker.isRunning{worker.terminate()}
         }
@@ -149,6 +161,12 @@ private enum RepeatFailure:Error {case connection,unmatched}
                     newPeers[index].onFailure={ [weak self] in guard let self,self.generation==token else{return};Task{await self.stop(message:"Связь потеряна · повтор выключен")}}
                 }
                 busy=false;enabled=true;message="В обе стороны · по элементам"
+                for index in 0..<2{
+                    model.sessions[index].tapHandler={ [weak self] point,duration in
+                        guard let self,self.generation==token,self.enabled else{return false}
+                        self.enqueue(index,["action":"sourceTap","x":point.x,"y":point.y,"duration":duration]);return true
+                    }
+                }
             }catch{if generation==token{let text=(error as? AuthFailure)?.message ?? "Не удалось включить повтор";Task{await self.stop(message:text)}}}
         }
     }
@@ -164,7 +182,15 @@ private enum RepeatFailure:Error {case connection,unmatched}
             defer{if generation==token{relayTask=nil}}
             while enabled,generation==token,!queue.isEmpty{
                 let (source,event)=queue.removeFirst()
-                do{try await peers[1-source].apply(event);guard generation==token else{return};repeated+=1;message="Повторено: \(repeated) · ↔"}
+                do{
+                    if event["action"] as? String == "sourceTap"{
+                        let relay=try await peers[source].sourceTap(event)
+                        guard generation==token,enabled else{return}
+                        guard let relay else{continue}
+                        try await peers[1-source].apply(relay)
+                    }else{try await peers[1-source].apply(event)}
+                    guard generation==token else{return};repeated+=1;message="Повторено: \(repeated) · ↔"
+                }
                 catch{if generation==token{
                     let text:String
                     switch error{case RepeatFailure.unmatched:text="Нет однозначного элемента · повтор выключен";case is CancellationError:text="Повтор выключен";default:text="Android не ответил · повтор выключен"}
@@ -174,8 +200,9 @@ private enum RepeatFailure:Error {case connection,unmatched}
         }
     }
     func stop(message:String="Повтор выключен")async {
-        if stopping{while stopping{try? await Task.sleep(nanoseconds:50_000_000)};return};stopping=true
+        if stopping{while stopping{await Task.detached{try? await Task.sleep(nanoseconds:50_000_000)}.value};return};stopping=true
         let token=UUID();generation=token;enabled=false;busy=true;self.message=message
+        model?.sessions.forEach{$0.tapHandler=nil}
         let startup=task;task=nil;startup?.cancel();relayTask?.cancel();queue.removeAll();relayTask=nil
         // Wait for any in-flight ADB preparation before tearing down its tunnel/process.
         await startup?.value

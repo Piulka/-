@@ -13,6 +13,8 @@ private final class Once: @unchecked Sendable {
 }
 
 final class EmbeddedAndroid: ObservableObject {
+    // Managed taps are resolved against the source UI before it can navigate away.
+    var tapHandler:((CGPoint,TimeInterval)->Bool)?
     @Published var state = "Не подключено"
     @Published var connected = false
     @Published var busy = false
@@ -238,6 +240,7 @@ final class EmbeddedAndroid: ObservableObject {
     }
     private func send(_ message:Data) { if connected { control?.send(content:message,completion:.contentProcessed({ _ in })) } }
     func touch(_ action:UInt8,_ point:CGPoint) { send(AndroidWire.touch(action:action,point:point,size:videoSize)) }
+    func nativeTap(_ point:CGPoint){touch(0,point);Task{@MainActor [weak self] in try? await Task.sleep(nanoseconds:40_000_000);self?.touch(1,point)}}
     func scroll(_ point:CGPoint,_ dx:Double,_ dy:Double) { send(AndroidWire.scroll(point:point,size:videoSize,dx:dx,dy:dy)) }
     func key(_ code:UInt32) { send(AndroidWire.key(code:code,action:0));send(AndroidWire.key(code:code,action:1)) }
     func text(_ text:String,paste:Bool=false) { send(AndroidWire.text(text,paste:paste || !text.unicodeScalars.allSatisfy({$0.isASCII}))) }
@@ -249,6 +252,10 @@ final class PhoneView: NSView {
     private var lastSample:CMSampleBuffer?
     private var timebase:CMTimebase?
     private var down = false
+    private var managed=false
+    private var began=Date()
+    private var startPoint=CGPoint.zero
+    private var startLocation=CGPoint.zero
     override var isFlipped:Bool { true }
     override var acceptsFirstResponder:Bool { true }
     override var mouseDownCanMoveWindow:Bool { false }
@@ -279,9 +286,24 @@ final class PhoneView: NSView {
         guard rect.width>0,rect.height>0,clamp || rect.contains(p) else { return nil }
         return CGPoint(x:max(0,min(1,(p.x-rect.minX)/rect.width)),y:max(0,min(1,(p.y-rect.minY)/rect.height)))
     }
-    override func mouseDown(with event:NSEvent) { window?.makeFirstResponder(self);if let p = point(event) { down = true;session?.touch(0,p) } }
-    override func mouseDragged(with event:NSEvent) { if down,let p=point(event,clamp:true) { session?.touch(2,p) } }
-    override func mouseUp(with event:NSEvent) { if down,let p=point(event,clamp:true) { session?.touch(1,p) }; down = false }
+    override func mouseDown(with event:NSEvent) {
+        window?.makeFirstResponder(self)
+        if let p=point(event){down=true;began=Date();startPoint=p;startLocation=event.locationInWindow;managed=session?.tapHandler != nil;if !managed{session?.touch(0,p)}}
+    }
+    override func mouseDragged(with event:NSEvent) {
+        guard down,let p=point(event,clamp:true) else{return}
+        if managed{
+            guard hypot(event.locationInWindow.x-startLocation.x,event.locationInWindow.y-startLocation.y)>4 else{return}
+            managed=false;session?.touch(0,startPoint)
+        }
+        session?.touch(2,p)
+    }
+    override func mouseUp(with event:NSEvent) {
+        defer{down=false;managed=false}
+        guard down,let p=point(event,clamp:true) else{return}
+        if managed{if session?.tapHandler?(startPoint,Date().timeIntervalSince(began)) != true{session?.nativeTap(startPoint)}}
+        else{session?.touch(1,p)}
+    }
     override func scrollWheel(with event:NSEvent) { if let p=point(event) { session?.scroll(p,Double(event.scrollingDeltaX)/25,Double(event.scrollingDeltaY)/25) } }
     override func keyDown(with event:NSEvent) {
         let keys:[UInt16:UInt32]=[51:67,117:112,36:66,76:66,48:61,53:4,123:21,124:22,125:20,126:19]

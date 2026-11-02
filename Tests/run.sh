@@ -12,6 +12,8 @@ jdk='/Applications/Android Studio.app/Contents/jbr/Contents/Home'
 "$jdk/bin/java" -cp "$test_dir" local.drivee.qahelper.StandHostTests
 "$jdk/bin/javac" -d "$test_dir" AndroidAutomation/src/local/drivee/qahelper/ElementMatch.java Tests/ElementMatchTests.java
 "$jdk/bin/java" -cp "$test_dir" local.drivee.qahelper.ElementMatchTests
+"$jdk/bin/javac" -d "$test_dir" AndroidAutomation/src/local/drivee/qahelper/TapTree.java Tests/TapTreeTests.java
+"$jdk/bin/java" -cp "$test_dir" local.drivee.qahelper.TapTreeTests
 swiftc -parse-as-library BuildModels.swift Tests/BuildModelsTests.swift -o "$test_dir/build-models-tests"
 "$test_dir/build-models-tests"
 python3 -B -m unittest discover -s Tests -p '*_test.py'

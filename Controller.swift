@@ -478,9 +478,8 @@ struct IPhoneControls:View {
                         else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
                     }
                     Button("Видеоповтор ↗"){model.showMirror()}
-                    Toggle("Прикрепить iPhone",isOn:Binding(get:{model.mirrorDock.enabled},set:{model.mirrorDock.setEnabled($0)})).toggleStyle(.switch).controlSize(.mini).disabled(auth.running).accessibilityIdentifier("mirror.dock")
-                        .help("Эксперимент: настоящее окно Apple размещается в третьей области. Технически остаётся отдельным окном macOS.")
-                    if model.mirrorDock.enabled && model.mirrorDock.inside{Button("Разместить рядом"){model.mirrorDock.moveAlongside()}.controlSize(.mini).disabled(auth.running)}
+                    Toggle("Связать окна",isOn:Binding(get:{model.mirrorDock.enabled},set:{model.mirrorDock.setEnabled($0)})).font(.system(size:10)).toggleStyle(.switch).controlSize(.mini).disabled(auth.running).accessibilityIdentifier("mirror.dock")
+                        .help("Отдельное окно Apple располагается справа, следует за пультом и сворачивается вместе с ним. Это не встраивание экрана.")
                     if !model.mirrorDock.message.isEmpty{Text(model.mirrorDock.message).font(.system(size:9)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)}
                 }.controlSize(.small).padding(.bottom,10)
             }
@@ -513,7 +512,7 @@ struct SettingsView:View {
             Divider()
             DeepLinkSettings(coordinator:model.deepLinks)
             Divider()
-            Label("Блок iPhone → «Прикрепить iPhone»: третья область или закрепление рядом. Используется настоящее окно Apple с прямым управлением.",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
+            Label("iPhone → «Связать окна»: отдельный видеоповтор справа, совместное перемещение и сворачивание. Экран Apple не встроен в пульт.",systemImage:"iphone").font(.callout).foregroundStyle(.secondary)
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
     }
@@ -567,10 +566,6 @@ struct DeskView:View {
             BuildsView(model:model,library:model.builds,active:tab == .builds).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
                 .opacity(tab == .builds ? 1 : 0).allowsHitTesting(tab == .builds).disabled(tab != .builds).accessibilityHidden(tab != .builds)
             if let editor=media.editor{ScreenshotEditor(document:editor,media:media).opacity(tab == .annotation ? 1 : 0).allowsHitTesting(tab == .annotation).disabled(tab != .annotation).accessibilityHidden(tab != .annotation)}
-            }
-            if model.mirrorDock.enabled && model.mirrorDock.inside{
-                Divider()
-                MirrorSlot(dock:model.mirrorDock).frame(width:model.mirrorDock.width).padding(.vertical,8)
             }
         }.frame(minWidth:720,minHeight:580).preferredColorScheme(.dark)
             .task{
