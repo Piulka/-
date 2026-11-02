@@ -387,10 +387,11 @@ private final class MovieEncoder:@unchecked Sendable {
     weak var media:MediaCoordinator?
     weak var builds:BuildLibrary?
     weak var androidRepeat:AndroidRepeat?
+    weak var otp:OTPBridge?
     func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         if let builds,builds.installing{builds.message="Дождитесь завершения установки перед выходом";return .terminateCancel}
-        guard media?.working == true || media?.takingScreenshot == true || androidRepeat?.engaged == true else{return .terminateNow}
-        Task{await androidRepeat?.stop();await media?.finishBeforeQuit();sender.reply(toApplicationShouldTerminate:true)}
+        guard media?.working == true || media?.takingScreenshot == true || androidRepeat?.engaged == true || otp?.working == true else{return .terminateNow}
+        Task{await otp?.finishBeforeQuit();await androidRepeat?.stop();await media?.finishBeforeQuit();sender.reply(toApplicationShouldTerminate:true)}
         return .terminateLater
     }
 }

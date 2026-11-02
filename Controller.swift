@@ -52,7 +52,9 @@ enum LocalProcess {
     let deepLinks=DeepLinkCoordinator()
     let builds=BuildLibrary()
     let androidRepeat=AndroidRepeat()
+    let otp=OTPBridge()
     private var repeatObservation:AnyCancellable?
+    private var otpObservation:AnyCancellable?
     private var connectionObservation:AnyCancellable?
     @Published var installingDevices:Set<String>=[]
     func isInstalling(_ slot:Int)->Bool{installingDevices.contains(selection[slot])}
@@ -77,6 +79,7 @@ enum LocalProcess {
         builds.model=self
         androidRepeat.model=self
         repeatObservation=androidRepeat.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
+        otpObservation=otp.objectWillChange.sink{[weak self] _ in self?.objectWillChange.send()}
         connectionObservation=Publishers.MergeMany(sessions.map{$0.$connected.removeDuplicates().map{_ in ()}.eraseToAnyPublisher()}).sink{[weak self] _ in
             Task{@MainActor in
                 guard let self else{return};self.objectWillChange.send()
@@ -204,15 +207,22 @@ enum LocalProcess {
     }
     func reloadAccounts(){accounts=AccountVault.accounts();reconcileAccountSelection()}
     func login(_ slot:Int){
+        guard !otp.working else{status="Дождитесь завершения сброса OTP";return}
         guard !androidRepeat.engaged else{status="Сначала выключите повтор нажатий";return}
         guard !selection[slot].isEmpty,!isInstalling(slot) else{return}
         guard accounts(on:stands[slot]).contains(where:{$0.id==accountSelection[slot]}),let phone=AccountVault.read(accountSelection[slot]),let otp=AccountVault.read("otp") else{authorizations[slot].message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         authorizations[slot].start(adb:adbPath,serial:selection[slot],phone:phone,otp:otp,stand:stands[slot])
     }
     func loginIPhone(){
+        guard !otp.working else{status="Дождитесь завершения сброса OTP";return}
         guard !installingDevices.contains("iphone") else{return}
         guard accounts(on:iphoneStand).contains(where:{$0.id==iphoneAccount}),let phone=AccountVault.read(iphoneAccount),let otp=AccountVault.read("otp") else{iosAuthorization.message="Добавьте аккаунт на вкладке «Аккаунты»";return}
         iosAuthorization.start(phone:phone,otp:otp,stand:iphoneStand)
+    }
+    func resetOTP(accountID:String,stand:String){
+        guard stand == "08",accounts(on:"08").contains(where:{$0.id==accountID}),let phone=AccountVault.read(accountID),OTPRules.valid(phone:phone,stand:stand) else{status="Выберите тестовый аккаунт test08 для сброса OTP";return}
+        guard !authorizations.contains(where:{$0.running}),!iosAuthorization.running else{status="Дождитесь завершения авторизации перед сбросом OTP";return}
+        otp.reset(phone:phone,id:accountID)
     }
     func navigation(_ code:UInt32,slot:Int){
         sessions[slot].key(code)
@@ -266,7 +276,12 @@ struct PhonePanel:View {
                         }.labelsHidden().frame(maxWidth:.infinity).disabled(auth.running || model.isInstalling(slot))
                         Picker("Стенд",selection:$model.stands[slot]){ForEach(QAEnvironment.all){Text($0.shortTitle).tag($0.id)}}.labelsHidden().frame(width:66).help("Стенд").disabled(auth.running || model.isInstalling(slot))
                         if auth.running{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}.help("Остановить")}
-                        else{Button("Войти"){model.login(slot)}.accessibilityIdentifier("auth.android.\(slot).login").disabled(model.accountSelection[slot].isEmpty || model.selection[slot].isEmpty || model.isInstalling(slot))}
+                        else{Button("Войти"){model.login(slot)}.accessibilityIdentifier("auth.android.\(slot).login").disabled(model.otp.working || model.accountSelection[slot].isEmpty || model.selection[slot].isEmpty || model.isInstalling(slot))}
+                        if model.stands[slot] == "08"{
+                            Button{model.resetOTP(accountID:model.accountSelection[slot],stand:model.stands[slot])}label:{Image(systemName:"clock.arrow.circlepath")}
+                                .help("Сбросить блокировку OTP выбранного аккаунта test08").accessibilityLabel("Сброс OTP").accessibilityIdentifier("otp.android.\(slot).reset")
+                                .disabled(model.otp.working || model.accountSelection[slot].isEmpty || model.authorizations.contains(where:{$0.running}) || model.iosAuthorization.running)
+                        }
                     }
                 }.controlSize(.small).padding(.horizontal,10).padding(.bottom,10)
             }
@@ -278,6 +293,9 @@ struct PhonePanel:View {
                     Spacer(minLength:0)
                     if auth.running && !expanded{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}.buttonStyle(.plain).help("Остановить вход")}
                 }.font(.system(size:10)).foregroundStyle(.secondary).padding(.horizontal,10).padding(.bottom,7)
+            }
+            if model.stands[slot] == "08",!model.otp.accountID.isEmpty,model.otp.accountID==model.accountSelection[slot],!model.otp.message.isEmpty{
+                Text(model.otp.message).font(.system(size:10)).foregroundStyle(model.otp.failed ? .orange : .secondary).padding(.horizontal,10).padding(.bottom,7).accessibilityIdentifier("otp.android.\(slot).status")
             }
             ZStack {
                 Color.black
@@ -471,9 +489,13 @@ struct IPhoneControls:View {
                     HStack{
                         Picker("Стенд",selection:$model.iphoneStand){ForEach(QAEnvironment.all){Text($0.shortTitle).tag($0.id)}}.labelsHidden().disabled(auth.running)
                         if auth.running{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}}
-                        else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
+                        else{Button("Войти"){model.loginIPhone()}.accessibilityIdentifier("auth.iphone.login").disabled(model.otp.working || model.iphoneAccount.isEmpty || model.installingDevices.contains("iphone"))}
                     }
                     Button("Видеоповтор ↗"){model.showMirror()}
+                    if model.iphoneStand == "08"{
+                        Button("Сброс OTP"){model.resetOTP(accountID:model.iphoneAccount,stand:model.iphoneStand)}
+                            .disabled(model.otp.working || model.iphoneAccount.isEmpty || auth.running || model.authorizations.contains(where:{$0.running})).accessibilityIdentifier("otp.iphone.reset")
+                    }
                 }.controlSize(.small).padding(.bottom,10)
             }
             if !auth.message.isEmpty{
@@ -481,6 +503,9 @@ struct IPhoneControls:View {
                     Text(auth.message).font(.system(size:10)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     if auth.running && !expanded{Button{auth.cancel()}label:{Image(systemName:"stop.fill")}.buttonStyle(.plain)}
                 }.padding(.bottom,9)
+            }
+            if model.iphoneStand == "08",!model.otp.accountID.isEmpty,model.otp.accountID==model.iphoneAccount,!model.otp.message.isEmpty{
+                Text(model.otp.message).font(.system(size:10)).foregroundStyle(model.otp.failed ? .orange : .secondary).padding(.bottom,9).accessibilityIdentifier("otp.iphone.status")
             }
         }.padding(.horizontal,10).frame(maxWidth:.infinity,alignment:.leading).background(Color.white.opacity(0.045),in:RoundedRectangle(cornerRadius:12))
             .onChange(of:model.iphoneAccount){_,_ in if !auth.running{auth.message=""}}
@@ -525,6 +550,7 @@ struct SettingsView:View {
             }
             SettingsSection(title:"Скриншоты и видео",id:"capture"){MediaSettings(media:model.media)}
             SettingsSection(title:"Диплинки и пресеты",id:"deeplinks"){DeepLinkSettings(coordinator:model.deepLinks)}
+            SettingsSection(title:"Сброс OTP · test08",id:"otp"){OTPBridgeSettings(model:model,bridge:model.otp)}
             Spacer(minLength:0)
         }.padding(26).frame(minWidth:460,minHeight:460,alignment:.topLeading).preferredColorScheme(.dark)
     }
@@ -601,6 +627,6 @@ struct DeskView:View {
         return CGSize(width:max(760,min(1100,screen.width-360)),height:max(620,min(940,screen.height-36)))
     }
     var body:some Scene {
-        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;delegate.androidRepeat=model.androidRepeat;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
+        Window(toolName,id:"main"){DeskView(model:model,media:model.media).onAppear{delegate.media=model.media;delegate.builds=model.builds;delegate.androidRepeat=model.androidRepeat;delegate.otp=model.otp;if let url=Bundle.main.url(forResource:"AppIcon",withExtension:"icns"),let icon=NSImage(contentsOf:url){NSApp.applicationIconImage=icon}}}.defaultSize(width:initial.width,height:initial.height).defaultPosition(.topLeading)
     }
 }

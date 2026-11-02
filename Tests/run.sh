@@ -18,4 +18,7 @@ swiftc -parse-as-library BuildModels.swift Tests/BuildModelsTests.swift -o "$tes
 "$test_dir/build-models-tests"
 swiftc -parse-as-library MediaClipboard.swift Tests/MediaClipboardTests.swift -o "$test_dir/media-clipboard-tests"
 "$test_dir/media-clipboard-tests"
+swiftc -parse-as-library OTPRules.swift Tests/OTPRulesTests.swift -o "$test_dir/otp-rules-tests"
+"$test_dir/otp-rules-tests"
+if command -v node >/dev/null; then node Tests/otp_bridge_core_test.cjs; fi
 python3 -B -m unittest discover -s Tests -p '*_test.py'

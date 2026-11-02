@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Жмякее · OTP test08",
+  "version": "1.0.0",
+  "description": "Сброс тестовых OTP-ключей test08 через открытую вкладку RedisInsight. Учётные данные остаются в Chrome.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7+LEcg1iJudJeQL5xkVrPXdQH1Ou0qJLM+6UY2dv7oWnPyzfcZEoIP67eWGGvn74E0ChInEgK1CrCaLudDeqVXrUXykqr/O+jlQ1ICIclVj0Kf6JRBBh8y11R30VX6wiFZR6CgY13EAWUMo0Gehq42UZ2yw/2ezeNto4YNrzoz8dmyq3t/QtKDqTicQKF7/nUvyyQUPOC7wWvZmMQEt88jSUiLPRnjSM6T2iJBijzJx7DMnxDE+THSXyn14YQocy+KN3jLailSRpqhLP5c1DXBowd2XPD8O8vwFCY9giKkh9rIGnG9n09lVOZha5qtsprELh3MkFM//QD+FgUvOuPwIDAQAB",
+  "permissions": [
+    "scripting",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://redis-insight.dev.indels.tech/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_title": "Подключить Жмякее · OTP test08"
+  }
+}
